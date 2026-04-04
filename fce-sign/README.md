@@ -216,7 +216,7 @@ determines the required fee for each operation.
 
 ### to-production times out
 
-Try restarting the proxy — it may have missed a signing policy round:
+Try restarting the proxy, it may have missed a signing policy round:
 
 ```bash
 docker compose down
