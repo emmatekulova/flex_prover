@@ -2,8 +2,8 @@
 
 import { useRef, useState } from "react"
 import { motion } from "framer-motion"
-import { Shield, ExternalLink, Twitter, QrCode, TrendingUp, Copy, Download, CheckCircle2 } from "lucide-react"
-import { QRCodeSVG } from "qrcode.react"
+import { Shield, ExternalLink, Twitter, TrendingUp, Copy, Download, CheckCircle2 } from "lucide-react"
+import { QRCodeCanvas } from "qrcode.react"
 import { Button } from "@/components/ui/button"
 
 interface ProofCardProps {
@@ -112,7 +112,7 @@ export function ProofCard({ walletAddress, profitPercent, txHash, startDate, end
               <p className="text-xs font-mono text-foreground break-all">{txHash}</p>
             </div>
             <div className="w-16 h-16 shrink-0 rounded-lg bg-white flex items-center justify-center overflow-hidden p-1">
-              <QRCodeSVG
+              <QRCodeCanvas
                 value={txUrl}
                 size={52}
                 bgColor="#ffffff"
