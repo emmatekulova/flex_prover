@@ -322,7 +322,12 @@ const FieldRow = memo(function FieldRow({ field, value, onChange }: FieldRowProp
 // ─── ApiKeyManager ────────────────────────────────────────────────────────────
 
 export interface ApiKeyManagerHandle {
-  save: () => Promise<void>
+  save: () => Promise<ApiKeySaveResult | null>
+}
+
+export interface ApiKeySaveResult {
+  exchange: Exchange
+  keys: Record<string, string>
 }
 
 interface ApiKeyManagerProps {
@@ -348,11 +353,11 @@ function ApiKeyManager({ onValidChange } = {}, ref) {
   // Expose save() so the parent's Continue button can trigger it
   useImperativeHandle(ref, () => ({
     save: async () => {
-      if (!allValid) return
-      const formState = { exchange, keys: { ...values } }
-      console.log("Saving Data...", formState)
-      // Replace with real API call
-      await new Promise((resolve) => setTimeout(resolve, 800))
+      if (!allValid || exchange === "") return null
+      return {
+        exchange,
+        keys: { ...values },
+      }
     },
   }), [allValid, exchange, values])
 

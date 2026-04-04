@@ -31,6 +31,7 @@ func main() {
 	_ = godotenv.Load("../../.env")
 
 	chainURL := flag.String("c", base.DefaultChainNodeURL, "chain RPC URL")
+	jsonOutput := flag.Bool("json", false, "print parsed attestation as JSON")
 	flag.Parse()
 
 	args := flag.Args()
@@ -96,22 +97,35 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Pretty-print the JSON payload.
-		var pretty interface{}
-		if jsonErr := json.Unmarshal(payload, &pretty); jsonErr == nil {
-			prettyBytes, _ := json.MarshalIndent(pretty, "", "  ")
-			fmt.Println("─── Attestation ────────────────────────────────────────")
-			fmt.Printf("TEE address : %s\n", teeAddress.Hex())
-			fmt.Printf("Timestamp   : %s\n", timestamp.String())
-			fmt.Printf("Signature   : %x\n", signature)
-			fmt.Println("Payload:")
-			fmt.Println(string(prettyBytes))
-			fmt.Println("────────────────────────────────────────────────────────")
-		} else {
-			// Fallback: raw string
-			fmt.Printf("TEE address: %s\n", teeAddress.Hex())
-			fmt.Printf("Payload: %s\n", string(payload))
+		var parsedPayload interface{}
+		if err := json.Unmarshal(payload, &parsedPayload); err != nil {
+			parsedPayload = map[string]string{"raw": string(payload)}
 		}
+
+		if *jsonOutput {
+			result := map[string]interface{}{
+				"teeAddress": teeAddress.Hex(),
+				"timestamp":  timestamp.String(),
+				"signature":  fmt.Sprintf("%x", signature),
+				"payload":    parsedPayload,
+			}
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			if err := enc.Encode(result); err != nil {
+				fmt.Fprintf(os.Stderr, "encode json output: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+
+		prettyBytes, _ := json.MarshalIndent(parsedPayload, "", "  ")
+		fmt.Println("--- Attestation ----------------------------------------")
+		fmt.Printf("TEE address : %s\n", teeAddress.Hex())
+		fmt.Printf("Timestamp   : %s\n", timestamp.String())
+		fmt.Printf("Signature   : %x\n", signature)
+		fmt.Println("Payload:")
+		fmt.Println(string(prettyBytes))
+		fmt.Println("--------------------------------------------------------")
 		return
 	}
 

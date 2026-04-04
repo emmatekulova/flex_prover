@@ -6,7 +6,7 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
-  allowedDevOrigins: ['10.105.176.85'],
+  allowedDevOrigins: ['10.105.176.70'],
   turbopack: {
     resolveAlias: {
       'jspdf': 'jspdf/dist/jspdf.es.min.js',
