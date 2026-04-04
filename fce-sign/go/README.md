@@ -1,190 +1,306 @@
-# TEE Extension Example - Private Key Manager (Go)
+# TEE Extension — Binance Attestation (Go)
 
-An example TEE extension that stores a private key and signs messages with it.
+A TEE extension that fetches live Binance account and market data inside a Trusted Execution Environment, signs it with the TEE's key, and publishes the attestation on-chain.
 
-## Binance attestation modes (implemented)
+## What it does
 
-This extension now also supports Binance data attestation from inside the TEE.
-Each operation fetches data, builds a JSON payload, signs that payload with the
-TEE key, and returns ABI-encoded `(payload, signature)`.
+```
+On-chain caller
+  → InstructionSender.fetchBinanceUserProfileAndAttest()
+    → TEE receives instruction
+      → fetches account data from Binance API (inside TEE)
+      → signs JSON payload with TEE key
+      → returns ABI-encoded (payload, signature)
+        → publish-attestation tool calls BinanceAttestationStore.publishAttestation()
+          → AttestationPublished event emitted on Coston2
+```
 
-Supported OP commands under `MARKET`:
+The `AttestationPublished` event contains:
+- `teeAddress` — Ethereum address recovered from the TEE's ECDSA signature
+- `payload` — raw JSON (UID, account type, balances, total USD value, etc.)
+- `signature` — 65-byte secp256k1 sig over `keccak256(payload)`
+- `timestamp` — block timestamp
 
-| OPCommand | Purpose | Auth required |
-|---|---|---|
-| `BINANCE_FETCH_AND_ATTEST` | Current ticker price for a symbol (`/api/v3/ticker/price`) | No |
-| `BINANCE_24H_STATS` | Public 24h market stats (`/api/v3/ticker/24hr`) | No |
-| `BINANCE_ACCOUNT_SUMMARY` | Spot account balances + estimated total USDT | Yes (`BINANCE_API_KEY`, `BINANCE_SECRET_KEY`) |
-| `BINANCE_ACCOUNT_PNL` | Futures account metrics/PnL (`/fapi/v2/account`) | Yes + futures permissions |
+Anyone can verify the payload was produced inside a genuine TEE by checking `teeAddress` against the Flare TEE machine registry.
 
-### How TEE signing works
+---
 
-For each handler:
+## Prerequisites
 
-1. Fetch from Binance API
-2. Parse and normalize response into an attestation payload
-3. POST payload bytes to local TEE node `http://localhost:$SIGN_PORT/sign`
-4. Return ABI-encoded `(payload, signature)` in action result data
+- **Docker & Docker Compose**
+- **Go 1.23+** and **Foundry** (`forge`, `cast`)
+- **Cloudflared** or ngrok (to tunnel local port to internet)
+- **A funded Coston2 wallet** (C2FLR for gas + TEE fees)
 
-The signature is produced by the TEE key, so downstream verification can prove
-the payload was produced and attested inside your TEE runtime.
+Everything is available in the Nix dev shell:
+```bash
+nix-shell shell.nix
+```
 
-## For Hackathon Participants
+---
 
-This is a **working example** to use as a starting point. You should modify the
-files in `internal/app/` and the shared `contract/InstructionSender.sol` to build
-your own extension. The files in `internal/base/` are framework infrastructure --
-you should not need to modify them.
+## Setup
 
-### What to change
+### Step 0: Configure environment
 
-| File | Purpose |
-|------|---------|
-| `internal/app/handlers.go` | Your business logic -- register handlers, process messages |
-| `internal/app/config.go` | Version constant |
-| `internal/app/types.go` | Request/response types for external calls |
-| `internal/app/abi.go` | ABI encoding for your specific data types |
-| `internal/app/crypto.go` | Cryptographic operations (only if your extension needs them) |
-| `contract/InstructionSender.sol` | On-chain contract that sends instructions to your extension |
+```bash
+cp .env.example .env
+```
 
-### What's provided by `base/`
+Fill in `.env`:
+```bash
+PRIVATE_KEY="<your funded Coston2 private key, no 0x>"
+INITIAL_OWNER="0x<your wallet address>"
+BINANCE_API_KEY="<your Binance API key>"
+BINANCE_SECRET_KEY="<your Binance secret key>"
+LANGUAGE=go
+```
 
-| Package | Functions |
-|---------|-----------|
-| `base` (encoding) | `HexToBytes(hex)`, `BytesToHex(bytes)` |
-| `base` (crypto) | `Keccak256(data)` |
-| `base` (types) | `Framework` (handler registration), protocol types |
-| `base` (server) | HTTP server (you never call this directly) |
+Also copy the proxy config:
+```bash
+cp config/proxy/extension_proxy.toml.example config/proxy/extension_proxy.toml
+# Fill in [db] section with your Coston2 C-chain indexer credentials
+```
 
-### Handler signature
+### Step 1: Deploy the InstructionSender contract
 
+```bash
+cd go/tools
+go run ./cmd/deploy-contract
+```
+
+Copy the printed address to `.env`:
+```bash
+INSTRUCTION_SENDER="0x<printed address>"
+```
+
+### Step 2: Register the extension
+
+```bash
+go run ./cmd/register-extension --instructionSender $INSTRUCTION_SENDER
+```
+
+Copy the printed extension ID to `.env`:
+```bash
+EXTENSION_ID="0x<printed id>"
+```
+
+### Step 3: Start the Docker stack
+
+```bash
+# from project root
+docker compose build
+docker compose up -d
+```
+
+Wait for the proxy:
+```bash
+until curl -sf http://localhost:6676/info >/dev/null 2>&1; do sleep 2; done
+echo "proxy ready"
+```
+
+### Step 4: Start a tunnel
+
+In a separate terminal (keep it running):
+```bash
+cloudflared tunnel --url http://localhost:6676
+# or: ngrok http 6676
+```
+
+Copy the printed URL to `.env`:
+```bash
+TUNNEL_URL="https://<your-tunnel>.trycloudflare.com"
+```
+
+### Step 5: Allow TEE version
+
+```bash
+cd go/tools
+go run ./cmd/allow-tee-version -p http://localhost:6676
+```
+
+### Step 6: Register the TEE machine
+
+```bash
+go run ./cmd/register-tee -p http://localhost:6676 -l
+# -l = local test mode (fake attestation token, required on Coston2 testnet)
+```
+
+### Step 7: Run the end-to-end test
+
+```bash
+go run ./cmd/run-test --instructionSender $INSTRUCTION_SENDER -p http://localhost:6676
+```
+
+---
+
+## Fetching Binance data (local test)
+
+Test any handler directly against the running extension without going through the chain:
+
+```bash
+cd go/tools
+
+# Current ticker price
+go run ./cmd/test-binance-attest -mode ticker -symbol BTCUSDT
+
+# 24h market stats
+go run ./cmd/test-binance-attest -mode stats -symbol BTCUSDT
+
+# Spot account balances + total USDT (requires BINANCE_API_KEY)
+go run ./cmd/test-binance-attest -mode account
+
+# Futures PnL (requires futures account)
+go run ./cmd/test-binance-attest -mode pnl
+
+# Full user profile: UID, account type, permissions, balances (requires BINANCE_API_KEY)
+go run ./cmd/test-binance-attest -mode profile
+```
+
+Each mode prints the signed payload and signature. Example for `profile`:
+```
+✅ Binance attestation + TEE sign succeeded
+mode=profile
+payload={"source":"binance-user-profile","uid":1228038409,"accountType":"SPOT",
+         "permissions":["TRD_GRP_041"],"canTrade":true,...}
+signature_len=65
+```
+
+---
+
+## Publishing attestations on-chain
+
+`BinanceAttestationStore` is a standalone contract that verifies TEE signatures and emits permanent on-chain events. Anyone can submit a valid (payload, signature) pair.
+
+### Deploy the store and publish in one step
+
+```bash
+cd go/tools
+go run ./cmd/publish-attestation
+```
+
+Output:
+```
+Fetching Binance user profile attestation from extension...
+  Payload (398 bytes): {"source":"binance-user-profile","uid":...}
+  Signature (65 bytes): 7147...
+No -store address given, deploying BinanceAttestationStore...
+  BinanceAttestationStore deployed at: 0x<address>
+  Set ATTESTATION_STORE=0x<address> in .env to reuse.
+Publishing attestation on-chain...
+  TX hash: 0x<hash>
+  Recovered TEE address: 0x<tee address>
+✅ Attestation published on-chain!
+```
+
+Add the store address to `.env` so subsequent runs skip deployment:
+```bash
+ATTESTATION_STORE="0x<address>"
+```
+
+### View on Coston2 explorer
+
+```
+https://coston2-explorer.flare.network/tx/0x<tx hash>
+```
+
+Look for the `AttestationPublished` event in the transaction logs. The decoded event shows the TEE address, payload, and timestamp.
+
+### Re-use an existing store
+
+```bash
+go run ./cmd/publish-attestation -store 0x<address>
+# or set ATTESTATION_STORE in .env
+```
+
+---
+
+## Supported op commands
+
+All handlers live under `OP_TYPE = MARKET`:
+
+| `opCommand` | Data fetched | Binance endpoint | Auth |
+|---|---|---|---|
+| `BINANCE_FETCH_AND_ATTEST` | Current ticker price | `/api/v3/ticker/price` | No |
+| `BINANCE_24H_STATS` | 24h market stats | `/api/v3/ticker/24hr` | No |
+| `BINANCE_ACCOUNT_SUMMARY` | Spot balances + total USDT | `/api/v3/account` | Yes |
+| `BINANCE_ACCOUNT_PNL` | Futures wallet + unrealised PnL | `/fapi/v2/account` | Yes + futures |
+| `BINANCE_USER_PROFILE` | UID, account type, permissions, balances | `/api/v3/account` | Yes |
+
+All handlers return ABI-encoded `(bytes payload, bytes signature)` where `signature` is a 65-byte secp256k1 ECDSA signature over `keccak256(payload)`.
+
+---
+
+## Contracts
+
+| Contract | Purpose |
+|---|---|
+| `InstructionSender.sol` | Sends instructions to the TEE; one function per op command |
+| `BinanceAttestationStore.sol` | Verifies TEE sig on-chain, emits `AttestationPublished` event |
+
+### Regenerating Go bindings after changing InstructionSender.sol
+
+```bash
+# Compile
+cd contract && forge build
+
+# Extract ABI + bytecode
+jq -r '.abi' out/InstructionSender.sol/InstructionSender.json > ../go/tools/app/contract/InstructionSender.abi
+jq -r '.bytecode.object' out/InstructionSender.sol/InstructionSender.json > ../go/tools/app/contract/InstructionSender.bin
+
+# Regenerate Go bindings
+cd ../go/tools && go generate ./...
+```
+
+---
+
+## Extending this for your hackathon project
+
+Modify files in `internal/app/` to build your own TEE extension:
+
+| File | What to change |
+|------|----------------|
+| `internal/app/handlers.go` | Add your handler functions, register them in `Register()` |
+| `internal/app/config.go` | Add your `OpType`/`OpCommand` constants (must match Solidity) |
+| `internal/app/types.go` | Add request/response types |
+| `contract/InstructionSender.sol` | Add a function for each new op command |
+
+Handler signature:
 ```go
 func myHandler(msg string) (data *string, status int, err error) {
-    // msg is the hex-encoded originalMessage from the on-chain instruction
-    // Return: data, status, error
-    //   status: 0 = error, 1 = success, >=2 = pending
+    // msg: hex-encoded originalMessage from the on-chain instruction
+    // Return: ABI-encoded result hex, status (0=error, 1=success, >=2=pending), error
     return &dataHex, 1, nil
 }
 ```
 
-## Tools (`go/tools/`)
+The `internal/base/` package is framework infrastructure — don't modify it.
 
-The `tools/` directory contains Go programs for deploying, registering, and
-testing the extension on Coston2. It is a separate Go module (`sign-tools`)
-from the extension runtime.
+---
 
-> **Note**: These tools work for **all extension languages** (Go, Python,
-> TypeScript). The scripts interact with smart contracts and the TEE proxy —
-> they don't depend on the extension's implementation language. Set `LANGUAGE`
-> in `.env` to choose which Docker image to build.
+## Tools reference
 
-### Structure
+All commands run from `go/tools/`. They read `PRIVATE_KEY`, `CHAIN_URL`, and `ADDRESSES_FILE` from `.env` at the repo root.
 
-```
-tools/
-  base/              # Generic -- copy to other extension repos as-is
-    configs.go       # Constants, ReadAddresses, dev key
-    support.go       # Support struct, .env loading, chain client
-    fccutils/        # TEE contract helpers (registration, versioning, etc.)
-  app/               # Extension-specific
-    contract/        # Generated Go bindings (autogen.go, ABI, BIN)
-    deploy.go        # Deploy contract, setExtensionId, send instructions
-    test.go          # End-to-end test (ECIES, updateKey, sign, verify)
-    generate.go      # go:generate directive for abigen
-  cmd/
-    deploy-contract/    # Deploy InstructionSender
-    register-extension/ # Register extension + allowlists
-    allow-tee-version/  # Add TEE version (code hash + platform)
-    register-tee/       # Register TEE machine (pre-reg -> attest -> produce)
-    run-test/           # Run end-to-end test
-    test-binance-attest/# Directly call extension /action and decode payload+signature
-```
+| Command | Purpose |
+|---|---|
+| `deploy-contract` | Deploy InstructionSender |
+| `register-extension` | Register extension on Flare TEE registry |
+| `allow-tee-version` | Whitelist TEE code hash + platform |
+| `register-tee` | Register TEE machine (pre-reg → attest → produce) |
+| `run-test` | End-to-end test (ECIES key update + sign + verify) |
+| `test-binance-attest` | Direct handler test (no chain required) |
+| `publish-attestation` | Fetch profile + deploy store + publish on-chain |
 
-### Prerequisites
+---
 
-- Go >= 1.23
-- `abigen` (from go-ethereum, for regenerating bindings)
-- `.env` file at the repo root (copy from `.env.example`)
+## Troubleshooting
 
-### Running the tools
-
-All commands are run from the `go/tools/` directory. They read configuration
-from `.env` at the repo root and `config/coston2/deployed-addresses.json`.
-
-```bash
-# Deploy the InstructionSender contract
-go run ./cmd/deploy-contract
-
-# Register the extension (after deploying)
-go run ./cmd/register-extension --instructionSender 0x<address>
-
-# Add TEE version (after extension stack is running)
-go run ./cmd/allow-tee-version -p http://localhost:6676
-
-# Register TEE machine (pre-reg, attest, to-production)
-go run ./cmd/register-tee -p http://localhost:6676 -l
-
-# Run the end-to-end test
-go run ./cmd/run-test --instructionSender 0x<address> -p http://localhost:6676
-
-# Direct Binance attestation tests against extension /action
-go run ./cmd/test-binance-attest -mode ticker -symbol BTCUSDT
-go run ./cmd/test-binance-attest -mode stats -symbol BTCUSDT
-go run ./cmd/test-binance-attest -mode account
-go run ./cmd/test-binance-attest -mode pnl
-```
-
-`test-binance-attest` modes:
-
-- `ticker`: fetch current ticker price and attest it
-- `stats`: fetch 24h stats and attest them
-- `account`: fetch spot balances, estimate USDT totals, attest summary
-- `pnl`: fetch futures account metrics and attest them
-
-### Environment variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PRIV_KEY` or `PRIVATE_KEY` | Wallet private key | Dev key (local only) |
-| `CHAIN_URL` | Coston2 RPC URL | `https://coston2-api.flare.network/ext/C/rpc` |
-| `ADDRESSES_FILE` | Deployed addresses JSON | `../../config/coston2/deployed-addresses.json` |
-| `BINANCE_API_KEY` | Binance API key (for `account`/`pnl` modes) | empty |
-| `BINANCE_SECRET_KEY` | Binance API secret (for `account`/`pnl` modes) | empty |
-| `BINANCE_SPOT_API_BASE_URL` | Spot API base URL override | `https://api.binance.com` |
-| `BINANCE_FUTURES_API_BASE_URL` | Futures API base URL override | `https://fapi.binance.com` |
-| `EXTENSION_APP_BIND` | Host bind for extension app endpoint | `127.0.0.1:8883` |
-
-### Command-line flags
-
-| Flag | Description | Used by |
-|------|-------------|---------|
-| `--instructionSender` | InstructionSender contract address | `register-extension`, `run-test` |
-| `-p, --proxy` | Extension proxy URL | `allow-tee-version`, `register-tee`, `run-test` |
-| `-l, --local` | Use test attestation (no real GCP JWT) | `register-tee` |
-| `-ep, --ext-proxy` | Existing production TEE proxy for attestation | `register-tee` |
-
-### Regenerating contract bindings
-
-If you modify `contract/InstructionSender.sol`:
-
-1. Compile with Foundry:
-   ```bash
-   cd ../../contract && forge build --root . --contracts . --out out
-   ```
-
-2. Extract ABI and BIN:
-   ```bash
-   jq -r '.abi' contract/out/InstructionSender.sol/InstructionSender.json > go/tools/app/contract/InstructionSender.abi
-   jq -r '.bytecode.object' contract/out/InstructionSender.sol/InstructionSender.json > go/tools/app/contract/InstructionSender.bin
-   ```
-
-3. Regenerate Go bindings:
-   ```bash
-   cd go/tools && go generate ./...
-   ```
-
-## Testing
-
-```bash
-go test ./...
-```
+| Error | Fix |
+|-------|-----|
+| `extension ID not set` | Run `go run ./cmd/run-test` (calls `setExtensionId` first) |
+| `501 unsupported op type` | Rebuild Docker image: `docker compose build extension-tee && docker compose up -d extension-tee` |
+| Binance 400 error | Symbol format should be `BTCUSDT` not `BTC/USDT` |
+| `FeeTooLow` revert | Increase `FEE_WEI` in `.env` |
+| Tunnel drops | Restart cloudflared, update `TUNNEL_URL`, re-run steps 5–6 |
+| `ecrecover failed` | Signature length must be exactly 65 bytes |
