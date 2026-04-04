@@ -264,3 +264,4 @@ After a full reset, start again from [Step 0](#step-0-configure-environment).
 > TEEs) cannot be reset. Each fresh start will deploy a new InstructionSender
 > contract and register a new extension. This is fine for testing — Coston2 is
 > a testnet.
+
