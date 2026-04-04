@@ -2,7 +2,6 @@
 
 ## Quick start
 
-
 1. Go to frontend:
 	- `cd frontend`
 
@@ -11,9 +10,6 @@
 
 3. Run development server:
 	- `npm run dev`
-
-4. Build for production:
-	- `npm run build`
 
 ## LAN dev access (optional)
 
