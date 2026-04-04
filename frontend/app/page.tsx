@@ -34,6 +34,7 @@ import { FlexCard } from "@/components/flex-card"
 import { Verifier } from "@/components/verifier"
 import { DocsSheet } from "@/components/docs-sheet"
 import { ApiKeyManager, type ApiKeyManagerHandle } from "@/components/api-key-manager"
+import { WhalePage } from "@/components/whale-page"
 
 // Trade data type
 interface TradeData {
@@ -78,7 +79,7 @@ const steps = [
 ]
 
 type AppState = "landing" | "wizard" | "calculating" | "celebration"
-type Tab = "create" | "verify"
+type Tab = "create" | "verify" | "whale"
 type TradeTab = "open" | "closed"
 
 // ─── Memoized sub-component ───────────────────────────────────────────────────
@@ -438,6 +439,16 @@ export default function FlexProver() {
               }`}
             >
               Verify
+            </button>
+            <button
+              onClick={() => setActiveTab("whale")}
+              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                activeTab === "whale"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Whale Group
             </button>
           </div>
         )}
@@ -971,8 +982,14 @@ export default function FlexProver() {
                     </Button>
                   </div>
                 </div>
+              ) : activeTab === "verify" ? (
+                <div className="max-w-lg mx-auto py-8">
+                  <Verifier />
+                </div>
               ) : (
-                <Verifier />
+                <div className="max-w-lg mx-auto py-8">
+                  <WhalePage walletAddress={walletAddress} onNavigateToCreate={() => setActiveTab("create")} />
+                </div>
               )}
             </div>
           </motion.div>
@@ -1141,12 +1158,37 @@ export default function FlexProver() {
                   </DropdownMenu>
                 </motion.div>
 
+                {/* Save proof link nudge */}
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.75 }}
+                  className="mt-6 p-4 rounded-xl bg-primary/10 border border-primary/30 space-y-2"
+                >
+                  <p className="text-sm font-medium text-primary">Save your proof link</p>
+                  <p className="text-xs text-muted-foreground">
+                    You'll need this URL to claim your Whale token later.
+                  </p>
+                  <p className="text-xs font-mono text-foreground break-all bg-secondary/50 rounded px-2 py-1">
+                    {`${typeof window !== "undefined" ? window.location.origin : ""}/verify/${proofHash}`}
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleCopyProofLink}
+                    className="w-full border-primary/30 text-primary hover:bg-primary/10"
+                  >
+                    <Link2 className="w-3 h-3 mr-2" />
+                    {copiedLink ? "Copied!" : "Copy proof link"}
+                  </Button>
+                </motion.div>
+
                 {/* Start Over */}
                 <motion.div
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  transition={{ delay: 0.8 }}
-                  className="mt-6 text-center"
+                  transition={{ delay: 0.9 }}
+                  className="mt-4 text-center"
                 >
                   <Button
                     variant="ghost"

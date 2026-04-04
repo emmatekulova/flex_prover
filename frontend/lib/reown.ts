@@ -9,6 +9,54 @@ import { createSiweMessage } from 'viem/siwe'
 
 const projectId = process.env.NEXT_PUBLIC_REOWN_PROJECT_ID!
 
+const STALE_WC_RECOVERY_FLAG = 'flexprover:wc-stale-recovered'
+
+function getErrorMessage(reason: unknown): string {
+  if (typeof reason === 'string') return reason
+  if (reason && typeof reason === 'object' && 'message' in reason) {
+    const msg = (reason as { message?: unknown }).message
+    if (typeof msg === 'string') return msg
+  }
+  return ''
+}
+
+function isStaleWalletConnectTopicError(message: string): boolean {
+  const normalized = message.toLowerCase()
+  return normalized.includes('no matching key') && normalized.includes("session topic doesn't exist")
+}
+
+function clearWalletConnectCache(): void {
+  if (typeof window === 'undefined') return
+
+  try {
+    const keysToRemove: string[] = []
+    for (let i = 0; i < window.localStorage.length; i += 1) {
+      const key = window.localStorage.key(i)
+      if (!key) continue
+      if (key.startsWith('wc@') || key.toLowerCase().includes('walletconnect')) {
+        keysToRemove.push(key)
+      }
+    }
+    keysToRemove.forEach((key) => window.localStorage.removeItem(key))
+  } catch {
+    // noop
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('unhandledrejection', (event) => {
+    const message = getErrorMessage(event.reason)
+    if (!isStaleWalletConnectTopicError(message)) return
+
+    const alreadyRecovered = window.sessionStorage.getItem(STALE_WC_RECOVERY_FLAG) === '1'
+    if (alreadyRecovered) return
+
+    clearWalletConnectCache()
+    window.sessionStorage.setItem(STALE_WC_RECOVERY_FLAG, '1')
+    window.location.reload()
+  })
+}
+
 // Flare Mainnet — not in wagmi/AppKit's built-in network list
 export const flare = defineChain({
   id: 14,
