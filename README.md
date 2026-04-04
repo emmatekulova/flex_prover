@@ -17,7 +17,7 @@ Flex Prover uses a **Trusted Execution Environment (TEE)** on Flare's Confidenti
 You choose exactly what to share. Nothing more.
 
 ### UML
-<img width="1253" height="611" alt="UML" src="https://github.com/user-attachments/assets/8fe3b3d5-9803-4c56-8782-fd1d164ba20d" />
+<img width="1253" height="611" alt="UML_diag" src="https://github.com/user-attachments/assets/1288ffe1-c5ea-4091-850c-c6844e669f9f" />
 
 
 ### How It Works
