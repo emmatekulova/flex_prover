@@ -91,10 +91,9 @@ const EXCHANGE_LABELS: Record<Exchange, string> = {
   bitget: "Bitget",
 }
 
-// Binance.gif is used as placeholder for Bitget until bitget.gif is added
 const TUTORIAL_GIF: Record<Exchange, string> = {
   binance: "/binance.gif",
-  bitget: "/binance.gif",
+  bitget: "/bitget.gif",
 }
 
 const TUTORIAL_STEPS: Record<Exchange, string[]> = {
