@@ -1,42 +1,78 @@
 "use client"
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { motion } from "framer-motion"
-import { Shield, ExternalLink, Twitter, QrCode, Eye, EyeOff, TrendingUp } from "lucide-react"
+import { Shield, ExternalLink, Twitter, QrCode, TrendingUp, Copy, Download, CheckCircle2 } from "lucide-react"
+import { QRCodeSVG } from "qrcode.react"
 import { Button } from "@/components/ui/button"
-import { Switch } from "@/components/ui/switch"
-import { Label } from "@/components/ui/label"
 
 interface ProofCardProps {
-  ensName: string
-  pnl: string
-  pnlPercentage: string
-  verifiedAt: string
+  walletAddress: string
+  profitPercent: string
+  txHash: string
+  startDate: string
+  endDate: string
 }
 
-export function ProofCard({ ensName, pnl, pnlPercentage, verifiedAt }: ProofCardProps) {
-  const [showPnl, setShowPnl] = useState(true)
-  const [showQr, setShowQr] = useState(true)
-  const [showTimestamp, setShowTimestamp] = useState(true)
+export function ProofCard({ walletAddress, profitPercent, txHash, startDate, endDate }: ProofCardProps) {
+  const cardRef = useRef<HTMLDivElement>(null)
+  const [copiedLink, setCopiedLink] = useState(false)
+
+  const txUrl = `https://flarescan.com/tx/${txHash}`
+  const shortWallet = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
+  const profitValue = profitPercent !== "" ? `${profitPercent}%` : "N/A"
 
   const handleShareToX = () => {
-    const text = `Just verified my trading performance with @FlexProver! ${showPnl ? pnlPercentage + " PNL" : ""} - Proof of Whale certified. #Web3 #DeFi`
-    window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank")
+    const text = `Just verified my trading performance on-chain! ${profitValue} PNL proven with @FlexProver on Flare Network. #FlexProver #Flare #DeFi`
+    window.open(
+      `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(txUrl)}`,
+      "_blank",
+    )
+  }
+
+  const handleCopyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(txUrl)
+    } catch {
+      const el = document.createElement("textarea")
+      el.value = txUrl
+      el.style.cssText = "position:fixed;opacity:0"
+      document.body.appendChild(el)
+      el.select()
+      document.execCommand("copy")
+      document.body.removeChild(el)
+    }
+    setCopiedLink(true)
+    setTimeout(() => setCopiedLink(false), 1500)
+  }
+
+  const handleDownloadPng = async () => {
+    if (!cardRef.current) return
+    const html2canvas = (await import("html2canvas")).default
+    const canvas = await html2canvas(cardRef.current, {
+      backgroundColor: "#0a0a0f",
+      scale: 2,
+      useCORS: true,
+    })
+    const link = document.createElement("a")
+    link.download = `proof-${shortWallet}.png`
+    link.href = canvas.toDataURL("image/png")
+    link.click()
   }
 
   return (
-    <div className="space-y-6">
-      {/* The Proof Card */}
+    <div className="space-y-4">
+      {/* The Proof Card — captured for PNG download */}
       <motion.div
-        initial={{ opacity: 0, scale: 0.9 }}
+        ref={cardRef}
+        initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.5 }}
-        className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-secondary p-1"
+        transition={{ duration: 0.4 }}
+        className="relative overflow-hidden rounded-2xl p-[1px] bg-gradient-to-br from-primary/40 via-border to-accent/30"
       >
-        <div className="absolute inset-0 bg-gradient-to-br from-primary/20 via-transparent to-accent/20 opacity-50" />
-        <div className="relative rounded-xl bg-card/90 backdrop-blur-xl p-6 sm:p-8">
+        <div className="rounded-2xl bg-[#0a0a0f] p-6 sm:p-8 space-y-6">
           {/* Header */}
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center">
                 <span className="text-primary font-bold text-sm">FP</span>
@@ -49,97 +85,90 @@ export function ProofCard({ ensName, pnl, pnlPercentage, verifiedAt }: ProofCard
             </div>
           </div>
 
-          {/* ENS Name */}
-          <div className="mb-6">
-            <p className="text-xs text-muted-foreground mb-1">Verified Identity</p>
-            <h2 className="text-3xl sm:text-4xl font-bold text-foreground tracking-tight">
-              {ensName}
-            </h2>
+          {/* Wallet */}
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">Wallet Address</p>
+            <p className="text-lg sm:text-xl font-bold text-foreground font-mono tracking-tight break-all">
+              {walletAddress}
+            </p>
           </div>
 
-          {/* PNL Display */}
-          {showPnl && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="mb-6 p-4 rounded-xl bg-primary/10 border border-primary/20"
-            >
-              <div className="flex items-center gap-2 mb-1">
-                <TrendingUp className="w-4 h-4 text-primary" />
-                <span className="text-xs text-muted-foreground">Trading Performance</span>
-              </div>
-              <div className="flex items-baseline gap-3">
-                <span className="text-3xl sm:text-4xl font-bold text-primary">
-                  {pnlPercentage}
-                </span>
-                <span className="text-lg text-muted-foreground">{pnl}</span>
-              </div>
-            </motion.div>
-          )}
-
-          {/* Footer */}
-          <div className="flex items-end justify-between">
-            <div>
-              {showTimestamp && (
-                <div>
-                  <p className="text-xs text-muted-foreground">Verified on</p>
-                  <p className="text-sm font-medium text-foreground">{verifiedAt}</p>
-                </div>
-              )}
+          {/* PNL */}
+          <div className="p-4 rounded-xl bg-primary/10 border border-primary/20">
+            <div className="flex items-center gap-2 mb-1">
+              <TrendingUp className="w-4 h-4 text-primary" />
+              <span className="text-xs text-muted-foreground">Verified Trading Performance</span>
             </div>
-            {showQr && (
-              <div className="w-16 h-16 rounded-lg bg-foreground/10 border border-border flex items-center justify-center">
-                <QrCode className="w-10 h-10 text-muted-foreground" />
-              </div>
-            )}
+            <p className="text-4xl font-bold text-primary">{profitValue}</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {startDate} — {endDate}
+            </p>
+          </div>
+
+          {/* Footer: TX + QR */}
+          <div className="flex items-end justify-between pt-2 border-t border-border/30">
+            <div className="min-w-0 mr-4">
+              <p className="text-xs text-muted-foreground mb-1">On-Chain Proof</p>
+              <p className="text-xs font-mono text-foreground break-all">{txHash}</p>
+            </div>
+            <div className="w-16 h-16 shrink-0 rounded-lg bg-white flex items-center justify-center overflow-hidden p-1">
+              <QRCodeSVG
+                value={txUrl}
+                size={52}
+                bgColor="#ffffff"
+                fgColor="#000000"
+                level="M"
+              />
+            </div>
           </div>
         </div>
       </motion.div>
 
-      {/* Card Controls */}
-      <div className="p-4 rounded-xl bg-secondary/50 border border-border space-y-4">
-        <h3 className="text-sm font-semibold text-foreground">Customize Card</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-pnl" className="text-sm text-muted-foreground flex items-center gap-2">
-              {showPnl ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
-              Show PNL
-            </Label>
-            <Switch id="show-pnl" checked={showPnl} onCheckedChange={setShowPnl} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-qr" className="text-sm text-muted-foreground flex items-center gap-2">
-              <QrCode className="w-4 h-4" />
-              QR Code
-            </Label>
-            <Switch id="show-qr" checked={showQr} onCheckedChange={setShowQr} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-timestamp" className="text-sm text-muted-foreground">
-              Timestamp
-            </Label>
-            <Switch id="show-timestamp" checked={showTimestamp} onCheckedChange={setShowTimestamp} />
-          </div>
-        </div>
-      </div>
-
       {/* Action Buttons */}
-      <div className="flex flex-col sm:flex-row gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Button
           onClick={handleShareToX}
-          className="flex-1 bg-foreground text-background hover:bg-foreground/90"
+          className="bg-foreground text-background hover:bg-foreground/90"
         >
           <Twitter className="w-4 h-4 mr-2" />
           Share to X
         </Button>
         <Button
           variant="outline"
-          className="flex-1 border-border text-foreground hover:bg-secondary"
+          onClick={handleCopyLink}
+          className="border-border text-foreground hover:bg-secondary"
         >
-          <ExternalLink className="w-4 h-4 mr-2" />
-          View On-Chain Proof
+          {copiedLink ? (
+            <>
+              <CheckCircle2 className="w-4 h-4 mr-2 text-primary" />
+              Copied!
+            </>
+          ) : (
+            <>
+              <Copy className="w-4 h-4 mr-2" />
+              Copy Link
+            </>
+          )}
+        </Button>
+        <Button
+          variant="outline"
+          onClick={handleDownloadPng}
+          className="border-border text-foreground hover:bg-secondary"
+        >
+          <Download className="w-4 h-4 mr-2" />
+          Download PNG
         </Button>
       </div>
+
+      {/* View on Flarescan */}
+      <Button
+        variant="ghost"
+        className="w-full text-muted-foreground hover:text-foreground"
+        onClick={() => window.open(txUrl, "_blank")}
+      >
+        <ExternalLink className="w-4 h-4 mr-2" />
+        View Transaction on Flarescan
+      </Button>
     </div>
   )
 }
