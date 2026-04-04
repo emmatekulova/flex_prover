@@ -1,0 +1,28 @@
+# Go
+vendor/
+go/tools/publish-attestation
+go/tools/deploy-contract
+go/tools/register-extension
+go/tools/allow-tee-version
+go/tools/register-tee
+go/tools/run-test
+go/tools/test-binance-attest
+
+# Forge build cache
+contract/cache/
+
+# Environment files (contain secrets)
+.env
+config/proxy/extension_proxy.toml
+
+# Build output
+out/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# TypeScript / Node
+node_modules/
+dist/

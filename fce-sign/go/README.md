@@ -32,11 +32,6 @@ Anyone can verify the payload was produced inside a genuine TEE by checking `tee
 - **Cloudflared** or ngrok (to tunnel local port to internet)
 - **A funded Coston2 wallet** (C2FLR for gas + TEE fees)
 
-Everything is available in the Nix dev shell:
-```bash
-nix-shell shell.nix
-```
-
 ---
 
 ## Setup
