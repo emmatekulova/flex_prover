@@ -97,8 +97,6 @@ export default function FlexProver() {
   // Wallet state — driven by iron-session (populated after SIWX verification)
   const [walletConnected, setWalletConnected] = useState(false)
   const [walletAddress, setWalletAddress] = useState<string | null>(null)
-  const [ensName] = useState<string | null>(null)
-  const hasEns = false // ENS lookup not yet implemented; placeholder for future task
 
   // Poll the server session so the UI reflects iron-session state
   useEffect(() => {
@@ -129,6 +127,7 @@ export default function FlexProver() {
   const [apiKey, setApiKey] = useState("")
   const [showApiKey, setShowApiKey] = useState(false)
   const [apiVerified, setApiVerified] = useState(false)
+  const [apiKeyError, setApiKeyError] = useState(false)
 
   // Trade selection state
   const [tradeTab, setTradeTab] = useState<TradeTab>("closed")
@@ -191,7 +190,7 @@ export default function FlexProver() {
       "Fetching Binance UID...",
       `Retrieving trade data for ${selectedTrade?.pair}...`,
       "Calculating PNL metrics...",
-      "Verifying ENS ownership on-chain...",
+
       "Generating cryptographic proof...",
       "Proof signature verified",
       "Binding identity to proof...",
@@ -209,8 +208,14 @@ export default function FlexProver() {
   }
 
   const verifyApiKey = () => {
-    if (apiKey.length > 0) {
+    // Basic validation: Binance API keys are alphanumeric, typically 60-90+ chars
+    const binanceApiKeyRegex = /^[a-zA-Z0-9]{20,}$/
+    if (binanceApiKeyRegex.test(apiKey)) {
       setApiVerified(true)
+      setApiKeyError(false)
+    } else {
+      setApiKeyError(true)
+      setApiVerified(false)
     }
   }
 
@@ -484,13 +489,13 @@ export default function FlexProver() {
                             Connect Your Wallet
                           </h2>
                           <p className="text-muted-foreground">
-                            Link your Ethereum wallet to verify your ENS identity.
+                            Connect your wallet to get started.
                           </p>
                         </div>
 
                         {/* AppKit handles wallet connection + SIWX signing in one flow */}
                         <div className="flex justify-center">
-                          <appkit-button />
+                          <appkit-button balance="hide" />
                         </div>
 
                         {walletConnected && walletAddress && (
@@ -512,25 +517,7 @@ export default function FlexProver() {
                               </div>
                             </div>
 
-                            {hasEns && ensName ? (
-                              <div className="p-4 rounded-xl bg-primary/10 border border-primary/20">
-                                <div className="flex items-center gap-2 mb-1">
-                                  <span className="text-xs text-muted-foreground">
-                                    ENS Name Detected
-                                  </span>
-                                </div>
-                                <p className="text-xl font-bold text-foreground">{ensName}</p>
-                              </div>
-                            ) : (
-                              <div className="p-4 rounded-xl bg-secondary/30 border border-border/50">
-                                <div className="flex items-center gap-2">
-                                  <AlertTriangle className="w-4 h-4 text-muted-foreground" />
-                                  <span className="text-sm text-muted-foreground">
-                                    No ENS name detected. ENS lookup coming soon.
-                                  </span>
-                                </div>
-                              </div>
-                            )}
+
                           </div>
                         )}
                       </motion.div>
@@ -568,12 +555,12 @@ export default function FlexProver() {
                               <Label htmlFor="apiKey" className="text-foreground">
                                 Binance Read-Only API Key
                               </Label>
-                              <button
-                                onClick={() => setDocsOpen(true)}
-                                className="text-muted-foreground hover:text-accent transition-colors"
-                              >
-                                <Info className="w-4 h-4" />
-                              </button>
+                              <div className="group relative">
+                                <Info className="w-4 h-4 text-muted-foreground hover:text-accent transition-colors cursor-help" />
+                                <div className="hidden group-hover:block absolute bottom-full left-0 mb-2 w-48 bg-secondary border border-border rounded-lg p-2 text-xs text-muted-foreground z-10">
+                                  Format is validated here. Full Binance connection will be verified in the next step.
+                                </div>
+                              </div>
                             </div>
                             <div className="relative">
                               <Input
@@ -584,6 +571,7 @@ export default function FlexProver() {
                                 onChange={(e) => {
                                   setApiKey(e.target.value)
                                   setApiVerified(false)
+                                  setApiKeyError(false)
                                 }}
                                 className="pr-10 bg-secondary border-border text-foreground placeholder:text-muted-foreground"
                               />
@@ -600,6 +588,16 @@ export default function FlexProver() {
                               </button>
                             </div>
                           </div>
+
+                          {/* Error Message */}
+                          {apiKeyError && (
+                            <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/30">
+                              <p className="text-sm text-destructive flex items-center gap-2">
+                                <AlertTriangle className="w-4 h-4" />
+                                Invalid format of API key.
+                              </p>
+                            </div>
+                          )}
 
                           {/* Verify Button */}
                           <Button
@@ -838,7 +836,7 @@ export default function FlexProver() {
                               Live Preview
                             </h3>
                             <FlexCard
-                              ensName={ensName ?? walletAddress?.slice(0, 6) ?? 'unknown.eth'}
+                              ensName={walletAddress?.slice(0, 6) ?? 'unknown'}
                               trade={selectedTrade || undefined}
                               showPnl={flexOptions.showPnl}
                               showEntryExit={flexOptions.showEntryExit}
@@ -877,12 +875,7 @@ export default function FlexProver() {
 
                         <div className="space-y-4">
                           <div className="p-4 rounded-xl bg-secondary/50 border border-border">
-                            <p className="text-xs text-muted-foreground mb-1">ENS Identity</p>
-                            <p className="font-semibold text-foreground">{ensName}</p>
-                          </div>
-
-                          <div className="p-4 rounded-xl bg-secondary/50 border border-border">
-                            <p className="text-xs text-muted-foreground mb-1">Wallet</p>
+                            <p className="text-xs text-muted-foreground mb-1">Wallet Address</p>
                             <p className="font-semibold text-foreground">{walletAddress}</p>
                           </div>
 
@@ -1066,7 +1059,7 @@ export default function FlexProver() {
                   transition={{ delay: 0.4 }}
                 >
                   <FlexCard
-                    ensName={ensName ?? walletAddress?.slice(0, 6) ?? 'unknown.eth'}
+                    ensName={walletAddress?.slice(0, 6) ?? 'unknown'}
                     trade={selectedTrade || undefined}
                     showPnl={flexOptions.showPnl}
                     showEntryExit={flexOptions.showEntryExit}

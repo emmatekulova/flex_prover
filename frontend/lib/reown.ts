@@ -109,6 +109,7 @@ const siwx: SIWXConfig = {
         message: session.message,
         signature: session.signature,
         chainId: session.data.chainId,
+        data: session.data,
       }),
     })
     if (!res.ok) {
@@ -124,9 +125,18 @@ const siwx: SIWXConfig = {
   getSessions: async (chainId: string, address: string): Promise<SIWXSession[]> => {
     const res = await fetch('/api/auth/siwx?action=session')
     if (!res.ok) return []
-    const { address: storedAddress, chainId: storedChainId } = (await res.json()) as {
+    const {
+      address: storedAddress,
+      chainId: storedChainId,
+      message: storedMessage,
+      signature: storedSignature,
+      data: storedData,
+    } = (await res.json()) as {
       address?: string
       chainId?: string
+      message?: string
+      signature?: string
+      data?: SIWXSession['data']
     }
 
     if (!storedAddress) return []
@@ -139,20 +149,17 @@ const siwx: SIWXConfig = {
 
     if (!matches) return []
 
-    // Return a minimal session — AppKit only checks sessions.length > 0
+    if (!storedMessage || !storedSignature || !storedData) return []
+
     return [
       {
         data: {
+          ...storedData,
           accountAddress: storedAddress,
           chainId: (storedChainId ?? chainId) as CaipNetworkId,
-          domain: window.location.host,
-          uri: window.location.origin,
-          version: '1',
-          nonce: '',
-          issuedAt: new Date().toISOString(),
         },
-        message: '',
-        signature: '',
+        message: storedMessage,
+        signature: storedSignature,
       },
     ]
   },
@@ -185,11 +192,18 @@ const siwx: SIWXConfig = {
 export const wagmiConfig = wagmiAdapter.wagmiConfig
 
 // Initialise AppKit — registers <appkit-button> web component globally
-createAppKit({
-  adapters: [wagmiAdapter, solanaAdapter],
-  networks: [flareNetwork, mainnet, solana],
-  defaultNetwork: flareNetwork,
-  projectId,
-  siwx,
-  features: { analytics: false },
-})
+declare global {
+  var __flexProverAppKitInitialized__: boolean | undefined
+}
+
+if (!globalThis.__flexProverAppKitInitialized__) {
+  createAppKit({
+    adapters: [wagmiAdapter, solanaAdapter],
+    networks: [flareNetwork, mainnet, solana],
+    defaultNetwork: flareNetwork,
+    projectId,
+    siwx,
+    features: { analytics: false },
+  })
+  globalThis.__flexProverAppKitInitialized__ = true
+}
