@@ -300,8 +300,71 @@ export default function FlexProver() {
     }
   }
 
-  const handleDownloadImage = () => {
-    alert("Downloading Flex Card image...")
+  const cardRef = useRef<HTMLDivElement>(null)
+
+  const getCardPngDataUrl = async (node: HTMLDivElement) => {
+    const { toPng } = await import("html-to-image")
+
+    // Wait for web fonts when available to reduce export race conditions.
+    try {
+      await document.fonts?.ready
+    } catch {
+      // noop
+    }
+
+    try {
+      return await toPng(node, {
+        pixelRatio: 3,
+        cacheBust: true,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+
+      // Firefox/WebKit can fail on font parsing with:
+      // "can't access property 'trim', font is undefined"
+      if (message.toLowerCase().includes("font") || message.toLowerCase().includes("trim")) {
+        return toPng(node, {
+          pixelRatio: 3,
+          cacheBust: true,
+          skipFonts: true,
+        })
+      }
+
+      throw error
+    }
+  }
+
+  const handleDownloadPng = async () => {
+    if (!cardRef.current) return
+    try {
+      const dataUrl = await getCardPngDataUrl(cardRef.current)
+      const link = document.createElement("a")
+      link.download = `flexprover-${proofHash}.png`
+      link.href = dataUrl
+      link.click()
+    } catch (error) {
+      console.error("Failed to export PNG:", error)
+      window.alert("Could not download PNG. Please try again.")
+    }
+  }
+
+  const handleDownloadPdf = async () => {
+    if (!cardRef.current) return
+    try {
+      const { default: jsPDF } = await import("jspdf")
+      const dataUrl = await getCardPngDataUrl(cardRef.current)
+      const img = new Image()
+      img.src = dataUrl
+      await new Promise((res) => { img.onload = res })
+      const w = img.naturalWidth / 3
+      const h = img.naturalHeight / 3
+      const pdf = new jsPDF({ orientation: "portrait", unit: "px", format: [w, h] })
+      pdf.addImage(dataUrl, "PNG", 0, 0, w, h)
+      pdf.save(`flexprover-${proofHash}.pdf`)
+    } catch (error) {
+      console.error("Failed to export PDF:", error)
+      window.alert("Could not download PDF. Please try again.")
+    }
   }
 
   const handleShareToX = () => {
@@ -310,8 +373,20 @@ export default function FlexProver() {
     window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank")
   }
 
-  const handleCopyProofLink = () => {
-    navigator.clipboard.writeText(`https://flexprover.io/verify/${proofHash}`)
+  const handleCopyProofLink = async () => {
+    const url = `https://flexprover.io/verify/${proofHash}`
+    try {
+      await navigator.clipboard.writeText(url)
+    } catch {
+      const el = document.createElement("textarea")
+      el.value = url
+      el.style.position = "fixed"
+      el.style.opacity = "0"
+      document.body.appendChild(el)
+      el.select()
+      document.execCommand("copy")
+      document.body.removeChild(el)
+    }
     setCopiedLink(true)
     setTimeout(() => setCopiedLink(false), 2000)
   }
@@ -995,21 +1070,24 @@ export default function FlexProver() {
                   animate={{ y: 0, opacity: 1 }}
                   transition={{ delay: 0.4 }}
                 >
-                  <FlexCard
-                    ensName={walletAddress?.slice(0, 6) ?? 'unknown'}
-                    trade={selectedTrade || undefined}
-                    showPnl={flexOptions.showPnl}
-                    showEntryExit={flexOptions.showEntryExit}
-                    showVolume={flexOptions.showVolume}
-                    showWalletAge={flexOptions.showWalletAge}
-                    showWhaleBadge={flexOptions.showWhaleBadge}
-                    showDuration={flexOptions.showDuration}
-                    showTimeframe={flexOptions.showTimeframe}
-                    showCurrentPrice={flexOptions.showCurrentPrice}
-                    showLiquidationPrice={flexOptions.showLiquidationPrice}
-                    showQrCode={true}
-                    isPreview={false}
-                  />
+                  <div ref={cardRef}>
+                    <FlexCard
+                      ensName={walletAddress?.slice(0, 6) ?? 'unknown'}
+                      trade={selectedTrade || undefined}
+                      showPnl={flexOptions.showPnl}
+                      showEntryExit={flexOptions.showEntryExit}
+                      showVolume={flexOptions.showVolume}
+                      showWalletAge={flexOptions.showWalletAge}
+                      showWhaleBadge={flexOptions.showWhaleBadge}
+                      showDuration={flexOptions.showDuration}
+                      showTimeframe={flexOptions.showTimeframe}
+                      showCurrentPrice={flexOptions.showCurrentPrice}
+                      showLiquidationPrice={flexOptions.showLiquidationPrice}
+                      showQrCode={true}
+                      isPreview={false}
+                      proofUrl={`${window.location.origin}/verify/${proofHash}`}
+                    />
+                  </div>
                 </motion.div>
 
                 {/* Action Buttons */}
@@ -1034,14 +1112,33 @@ export default function FlexProver() {
                     <Link2 className="w-4 h-4 mr-2" />
                     {copiedLink ? "Copied!" : "Copy Proof Link"}
                   </Button>
-                  <Button
-                    onClick={handleDownloadImage}
-                    variant="outline"
-                    className="flex-1 border-border text-foreground hover:bg-secondary h-12"
-                  >
-                    <Download className="w-4 h-4 mr-2" />
-                    Download
-                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="flex-1 border-border text-foreground hover:bg-secondary h-12"
+                      >
+                        <Download className="w-4 h-4 mr-2" />
+                        Download
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="bg-card border-border">
+                      <DropdownMenuItem
+                        onClick={handleDownloadPng}
+                        className="text-foreground focus:bg-secondary cursor-pointer"
+                      >
+                        <Download className="w-4 h-4 mr-2" />
+                        Download PNG
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={handleDownloadPdf}
+                        className="text-foreground focus:bg-secondary cursor-pointer"
+                      >
+                        <FileText className="w-4 h-4 mr-2" />
+                        Download PDF
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </motion.div>
 
                 {/* Start Over */}

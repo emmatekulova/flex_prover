@@ -12,7 +12,7 @@ export const metadata: Metadata = {
   title: 'FlexProver - Proof of Whale',
   description:
     'Sybil-resistant reputation engine. Bind your Binance PNL to your ENS identity using secure Flare TEE enclaves.',
-  generator: 'v0.app',
+  generator: 'FlexProver',
   icons: {
     icon: [
       { url: '/icon-light-32x32.png', media: '(prefers-color-scheme: light)' },

@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion"
 import { Shield, TrendingUp, TrendingDown, DollarSign, Clock, Award, Activity, QrCode, Target, Timer, Zap } from "lucide-react"
+import { QRCodeSVG } from "qrcode.react"
 
 interface TradeData {
   pair: string
@@ -32,6 +33,7 @@ interface FlexCardProps {
   showCurrentPrice?: boolean
   showLiquidationPrice?: boolean
   isPreview?: boolean
+  proofUrl?: string
 }
 
 export function FlexCard({
@@ -48,6 +50,7 @@ export function FlexCard({
   showCurrentPrice = false,
   showLiquidationPrice = false,
   isPreview = true,
+  proofUrl,
 }: FlexCardProps) {
   const defaultTrade: TradeData = {
     pair: "BTC/USDT",
@@ -234,17 +237,17 @@ export function FlexCard({
               <p className="text-xs font-medium text-foreground">Apr 3, 2026</p>
             </div>
             {showQrCode && (
-              <div className="w-10 h-10 rounded bg-foreground flex items-center justify-center overflow-hidden">
-                {isPreview ? (
-                  <QrCode className="w-6 h-6 text-muted-foreground" />
+              <div className="w-12 h-12 rounded bg-white flex items-center justify-center overflow-hidden p-1">
+                {isPreview || !proofUrl ? (
+                  <QrCode className="w-8 h-8 text-muted-foreground" />
                 ) : (
-                  <div className="w-full h-full bg-foreground p-1">
-                    <div className="w-full h-full grid grid-cols-5 grid-rows-5 gap-px">
-                      {Array.from({ length: 25 }).map((_, i) => (
-                        <div key={i} className={[0,1,2,4,5,6,10,14,18,19,20,22,23,24].includes(i) ? "bg-background" : "bg-foreground"} />
-                      ))}
-                    </div>
-                  </div>
+                  <QRCodeSVG
+                    value={proofUrl}
+                    size={40}
+                    bgColor="#ffffff"
+                    fgColor="#000000"
+                    level="M"
+                  />
                 )}
               </div>
             )}

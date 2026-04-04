@@ -6,8 +6,8 @@ import { Search, Upload, Shield, CheckCircle2, AlertTriangle, Cpu, FileCheck, Us
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
-export function Verifier() {
-  const [proofHash, setProofHash] = useState("")
+export function Verifier({ initialHash = "" }: { initialHash?: string }) {
+  const [proofHash, setProofHash] = useState(initialHash)
   const [verificationState, setVerificationState] = useState<"idle" | "verifying" | "verified" | "mismatch">("idle")
   const [showReport, setShowReport] = useState(false)
 
