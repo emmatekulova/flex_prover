@@ -1,13 +1,10 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, memo } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   Wallet,
-  Key,
   Eye,
-  EyeOff,
-  AlertTriangle,
   Shield,
   CheckCircle2,
   Terminal,
@@ -17,14 +14,12 @@ import {
   Download,
   Twitter,
   Sparkles,
-  Info,
   Link2,
   TrendingUp,
   TrendingDown,
   ChevronRight,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import {
@@ -37,6 +32,7 @@ import { StepWizard } from "@/components/step-wizard"
 import { FlexCard } from "@/components/flex-card"
 import { Verifier } from "@/components/verifier"
 import { DocsSheet } from "@/components/docs-sheet"
+import { ApiKeyManager, type ApiKeyManagerHandle } from "@/components/api-key-manager"
 
 // Trade data type
 interface TradeData {
@@ -84,6 +80,71 @@ type AppState = "landing" | "wizard" | "calculating" | "celebration"
 type Tab = "create" | "verify"
 type TradeTab = "open" | "closed"
 
+// ─── Memoized sub-component ───────────────────────────────────────────────────
+// Extracted to flatten the nesting depth around the ChevronRight icon and
+// prevent the entire list from re-rendering on every parent state change.
+
+const TradeListItem = memo(function TradeListItem({
+  trade,
+  onSelect,
+}: {
+  trade: TradeData
+  onSelect: (t: TradeData) => void
+}) {
+  const isPositive = trade.pnlPercent >= 0
+  const pnlColor = isPositive ? "text-emerald-400" : "text-red-400"
+  const iconBg = isPositive ? "bg-emerald-500/20" : "bg-red-500/20"
+  const directionStyle = trade.direction === "long"
+    ? "bg-emerald-500/20 text-emerald-400"
+    : "bg-red-500/20 text-red-400"
+  const dateLabel = trade.isOpen
+    ? `Opened ${trade.openedAt}`
+    : `Closed ${trade.closedAt ?? ""}`
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      whileHover={{ scale: 1.01 }}
+      onClick={() => onSelect(trade)}
+      className="p-4 rounded-xl bg-secondary/50 border border-border hover:border-primary/50 cursor-pointer transition-all"
+    >
+      <div className="flex items-center justify-between">
+        {/* Left: icon + pair info */}
+        <div className="flex items-center gap-3">
+          <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${iconBg}`}>
+            {isPositive
+              ? <TrendingUp className="w-5 h-5 text-emerald-400" />
+              : <TrendingDown className="w-5 h-5 text-red-400" />}
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-foreground">{trade.pair}</span>
+              <span className={`text-xs px-2 py-0.5 rounded ${directionStyle}`}>
+                {trade.direction.toUpperCase()}
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground">{dateLabel}</p>
+          </div>
+        </div>
+
+        {/* Right: PNL + chevron */}
+        <div className="flex items-center gap-3">
+          <div className="text-right">
+            <p className={`font-bold ${pnlColor}`}>
+              {isPositive ? "+" : ""}{trade.pnlPercent}%
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {trade.pnlAbsolute >= 0 ? "+" : ""}${trade.pnlAbsolute.toLocaleString()}
+            </p>
+          </div>
+          <ChevronRight className="w-4 h-4 text-muted-foreground" />
+        </div>
+      </div>
+    </motion.div>
+  )
+})
+
 export default function FlexProver() {
   const [appState, setAppState] = useState<AppState>("landing")
   const [activeTab, setActiveTab] = useState<Tab>("create")
@@ -124,10 +185,8 @@ export default function FlexProver() {
   }, [])
 
   // API Key state
-  const [apiKey, setApiKey] = useState("")
-  const [showApiKey, setShowApiKey] = useState(false)
   const [apiVerified, setApiVerified] = useState(false)
-  const [apiKeyError, setApiKeyError] = useState(false)
+  const apiKeyRef = useRef<ApiKeyManagerHandle>(null)
 
   // Trade selection state
   const [tradeTab, setTradeTab] = useState<TradeTab>("closed")
@@ -207,18 +266,6 @@ export default function FlexProver() {
     setAppState("celebration")
   }
 
-  const verifyApiKey = () => {
-    // Basic validation: Binance API keys are alphanumeric, typically 60-90+ chars
-    const binanceApiKeyRegex = /^[a-zA-Z0-9]{20,}$/
-    if (binanceApiKeyRegex.test(apiKey)) {
-      setApiVerified(true)
-      setApiKeyError(false)
-    } else {
-      setApiKeyError(true)
-      setApiVerified(false)
-    }
-  }
-
   const selectTrade = (trade: TradeData) => {
     setSelectedTrade(trade)
     setTradeListCollapsed(true)
@@ -235,7 +282,10 @@ export default function FlexProver() {
     setTradeListCollapsed(false)
   }
 
-  const nextStep = () => {
+  const nextStep = async () => {
+    if (currentStep === 2) {
+      await apiKeyRef.current?.save()
+    }
     if (currentStep < 4) {
       setCurrentStep(currentStep + 1)
     } else {
@@ -269,7 +319,6 @@ export default function FlexProver() {
     setAppState("landing")
     setCurrentStep(1)
     // Wallet state is managed by AppKit + iron-session; just reset UI
-    setApiKey("")
     setApiVerified(false)
     setLogoRevealed(false)
     setLogs([])
@@ -523,7 +572,7 @@ export default function FlexProver() {
                       </motion.div>
                     )}
 
-                    {/* Step 2: API Key */}
+                    {/* Step 2: API Key Manager */}
                     {currentStep === 2 && (
                       <motion.div
                         key="step2"
@@ -534,102 +583,26 @@ export default function FlexProver() {
                       >
                         <div>
                           <h2 className="text-2xl font-bold text-foreground mb-2">
-                            Link Binance Account
+                            Link Your Exchange Account
                           </h2>
                           <p className="text-muted-foreground">
-                            Enter your read-only API key to verify your trading history.
+                            Connect a read-only API key to verify your trading history.
                           </p>
                         </div>
 
-                        {/* Instructions */}
-                        <div className="p-4 rounded-xl bg-secondary/30 border border-border">
-                          <p className="text-sm text-muted-foreground">
-                            <span className="text-foreground font-medium">How to get your API key:</span>{" "}
-                            Go to Binance Profile → API Management → Create Tax/Reporting Key.
-                          </p>
-                        </div>
+                        <ApiKeyManager ref={apiKeyRef} onValidChange={setApiVerified} />
 
-                        <div className="space-y-4">
-                          <div className="space-y-2">
-                            <div className="flex items-center gap-2">
-                              <Label htmlFor="apiKey" className="text-foreground">
-                                Binance Read-Only API Key
-                              </Label>
-                              <div className="group relative">
-                                <Info className="w-4 h-4 text-muted-foreground hover:text-accent transition-colors cursor-help" />
-                                <div className="hidden group-hover:block absolute bottom-full left-0 mb-2 w-48 bg-secondary border border-border rounded-lg p-2 text-xs text-muted-foreground z-10">
-                                  Format is validated here. Full Binance connection will be verified in the next step.
-                                </div>
-                              </div>
-                            </div>
-                            <div className="relative">
-                              <Input
-                                id="apiKey"
-                                type={showApiKey ? "text" : "password"}
-                                placeholder="Enter your API key"
-                                value={apiKey}
-                                onChange={(e) => {
-                                  setApiKey(e.target.value)
-                                  setApiVerified(false)
-                                  setApiKeyError(false)
-                                }}
-                                className="pr-10 bg-secondary border-border text-foreground placeholder:text-muted-foreground"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => setShowApiKey(!showApiKey)}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                              >
-                                {showApiKey ? (
-                                  <EyeOff className="w-4 h-4" />
-                                ) : (
-                                  <Eye className="w-4 h-4" />
-                                )}
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Error Message */}
-                          {apiKeyError && (
-                            <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/30">
-                              <p className="text-sm text-destructive flex items-center gap-2">
-                                <AlertTriangle className="w-4 h-4" />
-                                Invalid format of API key.
+                        {/* TEE Security Badge */}
+                        <div className="p-4 rounded-xl bg-accent/10 border border-accent/20">
+                          <div className="flex items-start gap-3">
+                            <Shield className="w-5 h-5 text-accent mt-0.5" />
+                            <div>
+                              <p className="text-sm font-medium text-foreground">
+                                Shielded by Flare TEE
                               </p>
-                            </div>
-                          )}
-
-                          {/* Verify Button */}
-                          <Button
-                            onClick={verifyApiKey}
-                            disabled={!apiKey || apiVerified}
-                            className={`w-full ${apiVerified ? "bg-emerald-600 hover:bg-emerald-600" : "bg-secondary hover:bg-secondary/80"} border border-border text-foreground`}
-                          >
-                            {apiVerified ? (
-                              <>
-                                <CheckCircle2 className="w-4 h-4 mr-2" />
-                                API Key Verified
-                              </>
-                            ) : (
-                              <>
-                                <Key className="w-4 h-4 mr-2" />
-                                Verify
-                              </>
-                            )}
-                          </Button>
-
-                          {/* TEE Security Badge */}
-                          <div className="p-4 rounded-xl bg-accent/10 border border-accent/20">
-                            <div className="flex items-start gap-3">
-                              <Shield className="w-5 h-5 text-accent mt-0.5" />
-                              <div>
-                                <p className="text-sm font-medium text-foreground flex items-center gap-2">
-                                  Shielded by Flare TEE
-                                </p>
-                                <p className="text-xs text-muted-foreground mt-1">
-                                  <span className="text-accent font-medium">Secure Processing:</span> Your keys are parsed inside a Trusted Execution Environment on Flare Network; they are never stored or seen by us.
-                                </p>
-                              </div>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                <span className="text-accent font-medium">Secure Processing:</span> Your keys are parsed inside a Trusted Execution Environment on Flare Network; they are never stored or seen by us.
+                              </p>
                             </div>
                           </div>
                         </div>
@@ -702,48 +675,11 @@ export default function FlexProver() {
                                   className="space-y-2 max-h-[400px] overflow-y-auto pr-2"
                                 >
                                   {currentTrades.map((trade) => (
-                                    <motion.div
+                                    <TradeListItem
                                       key={trade.id}
-                                      initial={{ opacity: 0, y: 10 }}
-                                      animate={{ opacity: 1, y: 0 }}
-                                      whileHover={{ scale: 1.01 }}
-                                      onClick={() => selectTrade(trade)}
-                                      className="p-4 rounded-xl bg-secondary/50 border border-border hover:border-primary/50 cursor-pointer transition-all"
-                                    >
-                                      <div className="flex items-center justify-between">
-                                        <div className="flex items-center gap-3">
-                                          <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${trade.pnlPercent >= 0 ? "bg-emerald-500/20" : "bg-red-500/20"}`}>
-                                            {trade.pnlPercent >= 0 ? (
-                                              <TrendingUp className="w-5 h-5 text-emerald-400" />
-                                            ) : (
-                                              <TrendingDown className="w-5 h-5 text-red-400" />
-                                            )}
-                                          </div>
-                                          <div>
-                                            <div className="flex items-center gap-2">
-                                              <span className="font-semibold text-foreground">{trade.pair}</span>
-                                              <span className={`text-xs px-2 py-0.5 rounded ${trade.direction === "long" ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400"}`}>
-                                                {trade.direction.toUpperCase()}
-                                              </span>
-                                            </div>
-                                            <p className="text-xs text-muted-foreground">
-                                              {trade.isOpen ? `Opened ${trade.openedAt}` : `Closed ${trade.closedAt}`}
-                                            </p>
-                                          </div>
-                                        </div>
-                                        <div className="flex items-center gap-3">
-                                          <div className="text-right">
-                                            <p className={`font-bold ${trade.pnlPercent >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                                              {trade.pnlPercent >= 0 ? "+" : ""}{trade.pnlPercent}%
-                                            </p>
-                                            <p className="text-xs text-muted-foreground">
-                                              {trade.pnlAbsolute >= 0 ? "+" : ""}${trade.pnlAbsolute.toLocaleString()}
-                                            </p>
-                                          </div>
-                                          <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                                        </div>
-                                      </div>
-                                    </motion.div>
+                                      trade={trade}
+                                      onSelect={selectTrade}
+                                    />
                                   ))}
                                 </motion.div>
                               ) : (
