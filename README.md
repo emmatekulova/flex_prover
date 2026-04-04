@@ -4,11 +4,14 @@ Trustless proof of trading performance using TEE attestation on Flare.
 
 ## Problem
 
-Traders often need to prove their performance (PnL, win rate, etc.) to others — for credibility, fund management, or competitions. Current options are either too broad or too fragile:
+Traders are seeking to showcase their performance to the public or potential employers and face a common issue: the lack of a verifiable, trustless standard for sharing authenticated trades.
 
-- **Sharing read-only API keys** exposes your entire account: balances, positions, order history — far more than you want to reveal.
-- **Screenshots** are trivially faked.
-- **Self-reported stats** require trust in the person claiming them.
+The current options all fail in the same ways:
+
+- **Sharing read-only API keys** gives the other party access to your entire account: every position, every balance, full order history, linked addresses.
+- **Screenshots** prove nothing. Any number on a screenshot can be edited in thirty seconds.
+- **Self-reported stats** are the same problem with more steps. A spreadsheet you filled in is not a proof, it is a claim.
+- **Third-party trackers** require you to permanently connect your exchange account to an external service, which then owns that relationship indefinitely.
 
 ## Solution
 
