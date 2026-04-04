@@ -17,6 +17,7 @@ const (
 	OpCommandBinanceAccountPnl      = "BINANCE_ACCOUNT_PNL"
 	OpCommandBinanceAccountSummary  = "BINANCE_ACCOUNT_SUMMARY"
 	OpCommandBinanceUserProfile     = "BINANCE_USER_PROFILE"
+	OpCommandBinanceProfileGrowth   = "BINANCE_PROFILE_GROWTH"
 )
 
 // BinanceAPIKey returns the Binance API key from environment, if set.

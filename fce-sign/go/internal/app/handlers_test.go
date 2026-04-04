@@ -440,17 +440,8 @@ func TestActionBinanceAccountPnlAndAttest(t *testing.T) {
 		binanceFuturesAPIBaseURL = origFuturesBaseURL
 	}()
 
-	origAPIKey := os.Getenv("BINANCE_API_KEY")
-	origAPISecret := os.Getenv("BINANCE_SECRET_KEY")
-	defer func() {
-		_ = os.Setenv("BINANCE_API_KEY", origAPIKey)
-		_ = os.Setenv("BINANCE_SECRET_KEY", origAPISecret)
-	}()
-
-	_ = os.Setenv("BINANCE_API_KEY", "test-api-key")
-	_ = os.Setenv("BINANCE_SECRET_KEY", "test-secret")
-
 	expectedSig := []byte{0x11, 0x22, 0x33}
+	requestPayload := []byte(`{"apiKey":"test-api-key","secretKey":"test-secret"}`)
 
 	mockNode := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -489,7 +480,7 @@ func TestActionBinanceAccountPnlAndAttest(t *testing.T) {
 	binanceFuturesAPIBaseURL = mockNode.URL
 
 	srv := base.New("0", signPort, Version, Register, ReportState)
-	body := makeActionBody(opTypeHex("MARKET"), opTypeHex("BINANCE_ACCOUNT_PNL"), base.BytesToHex([]byte("{}")))
+	body := makeActionBody(opTypeHex("MARKET"), opTypeHex("BINANCE_ACCOUNT_PNL"), base.BytesToHex(requestPayload))
 	req := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -565,7 +556,7 @@ func TestActionBinanceAccountPnlMissingCredentials(t *testing.T) {
 	if result.Status != 0 {
 		t.Errorf("expected status 0, got %d", result.Status)
 	}
-	if result.Log == nil || !strings.Contains(*result.Log, "BINANCE_API_KEY and BINANCE_SECRET_KEY are required") {
+	if result.Log == nil || !strings.Contains(*result.Log, "apiKey and secretKey are required") {
 		t.Errorf("expected missing credentials error, got %v", result.Log)
 	}
 }
@@ -678,17 +669,8 @@ func TestActionBinanceAccountSummaryAndAttest(t *testing.T) {
 		binanceAPIBaseURL = origSpotBaseURL
 	}()
 
-	origAPIKey := os.Getenv("BINANCE_API_KEY")
-	origAPISecret := os.Getenv("BINANCE_SECRET_KEY")
-	defer func() {
-		_ = os.Setenv("BINANCE_API_KEY", origAPIKey)
-		_ = os.Setenv("BINANCE_SECRET_KEY", origAPISecret)
-	}()
-
-	_ = os.Setenv("BINANCE_API_KEY", "test-api-key")
-	_ = os.Setenv("BINANCE_SECRET_KEY", "test-secret")
-
 	expectedSig := []byte{0xaa, 0xbb, 0xcc}
+	requestPayload := []byte(`{"apiKey":"test-api-key","secretKey":"test-secret"}`)
 
 	mockNode := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -729,7 +711,7 @@ func TestActionBinanceAccountSummaryAndAttest(t *testing.T) {
 	binanceAPIBaseURL = mockNode.URL
 
 	srv := base.New("0", signPort, Version, Register, ReportState)
-	body := makeActionBody(opTypeHex("MARKET"), opTypeHex("BINANCE_ACCOUNT_SUMMARY"), base.BytesToHex([]byte("{}")))
+	body := makeActionBody(opTypeHex("MARKET"), opTypeHex("BINANCE_ACCOUNT_SUMMARY"), base.BytesToHex(requestPayload))
 	req := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -778,5 +760,97 @@ func TestActionBinanceAccountSummaryAndAttest(t *testing.T) {
 	}
 	if len(payload.Assets) == 0 {
 		t.Errorf("assets should not be empty")
+	}
+}
+
+func TestActionBinanceUserProfileWithPayloadCredentials(t *testing.T) {
+	privateKey = nil
+	lastBinanceEstimatedTotalUSDT = ""
+
+	origSpotBaseURL := binanceAPIBaseURL
+	defer func() {
+		binanceAPIBaseURL = origSpotBaseURL
+	}()
+
+	expectedSig := []byte{0x44, 0x55, 0x66}
+	requestPayload := []byte(`{"apiKey":"test-api-key","secretKey":"test-secret"}`)
+
+	mockNode := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/account":
+			if r.Header.Get("X-MBX-APIKEY") != "test-api-key" {
+				http.Error(w, "missing api key", http.StatusUnauthorized)
+				return
+			}
+			json.NewEncoder(w).Encode(BinanceSpotAccountResponse{
+				UID:         123456,
+				AccountType: "SPOT",
+				Permissions: []string{"TRD_GRP_041"},
+				CanTrade:    true,
+				CanDeposit:  true,
+				CanWithdraw: true,
+				Balances: []BinanceSpotBalance{
+					{Asset: "USDT", Free: "50.0", Locked: "0"},
+					{Asset: "BTC", Free: "0.1", Locked: "0"},
+				},
+			})
+		case "/api/v3/ticker/price":
+			json.NewEncoder(w).Encode([]BinanceTickerPriceEntry{{Symbol: "BTCUSDT", Price: "65000"}})
+		case "/sign":
+			var req SignRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			json.NewEncoder(w).Encode(SignResponse{Message: req.Message, Signature: expectedSig})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer mockNode.Close()
+
+	parts := strings.Split(mockNode.URL, ":")
+	signPort = parts[len(parts)-1]
+	httpClient = http.DefaultClient
+	binanceAPIBaseURL = mockNode.URL
+
+	srv := base.New("0", signPort, Version, Register, ReportState)
+	body := makeActionBody(opTypeHex("MARKET"), opTypeHex("BINANCE_USER_PROFILE"), base.BytesToHex(requestPayload))
+	req := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	resp := w.Result()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d, body: %s", resp.StatusCode, respBody)
+	}
+
+	var result base.ActionResult
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if result.Status != 1 {
+		t.Fatalf("expected success status=1, got %d log=%v", result.Status, result.Log)
+	}
+	if result.Data == nil {
+		t.Fatal("result data is nil")
+	}
+
+	encoded, err := base.HexToBytes(*result.Data)
+	if err != nil {
+		t.Fatalf("hex decode result data: %v", err)
+	}
+
+	payloadBytes, sig, err := abiDecodeTwo(encoded)
+	if err != nil {
+		t.Fatalf("abi decode result data: %v", err)
+	}
+
+	if string(sig) != string(expectedSig) {
+		t.Fatalf("signature mismatch: got %x want %x", sig, expectedSig)
+	}
+	if len(payloadBytes) == 0 {
+		t.Errorf("payload bytes should not be empty")
 	}
 }

@@ -48,6 +48,7 @@ func Register(f *base.Framework) {
 	f.Handle(OpTypeMarket, OpCommandBinanceAccountPnl, handleBinanceAccountPnl)
 	f.Handle(OpTypeMarket, OpCommandBinanceAccountSummary, handleBinanceAccountSummary)
 	f.Handle(OpTypeMarket, OpCommandBinanceUserProfile, handleBinanceUserProfile)
+	f.Handle(OpTypeMarket, OpCommandBinanceProfileGrowth, handleBinanceProfileGrowth)
 }
 
 // ReportState returns a JSON snapshot of the current state.
@@ -68,8 +69,13 @@ func ReportState() json.RawMessage {
 // handleBinanceUserProfile fetches the authenticated Binance spot account, enriches it
 // with UID, account type, and permissions, computes per-asset USD values, then returns
 // ABI-encoded (payload, signature) signed by the TEE node key.
-func handleBinanceUserProfile(_ string) (data *string, status int, err error) {
-	account, fetchErr := fetchBinanceSpotAccount()
+func handleBinanceUserProfile(msg string) (data *string, status int, err error) {
+	creds, parseErr := parseBinanceAuthenticatedRequest(msg)
+	if parseErr != nil {
+		return nil, 0, parseErr
+	}
+
+	account, fetchErr := fetchBinanceSpotAccount(creds.APIKey, creds.SecretKey)
 	if fetchErr != nil {
 		return nil, 0, fetchErr
 	}
@@ -157,8 +163,13 @@ func handleBinanceUserProfile(_ string) (data *string, status int, err error) {
 	return &dataHex, 1, nil
 }
 
-func handleBinanceAccountSummary(_ string) (data *string, status int, err error) {
-	account, fetchErr := fetchBinanceSpotAccount()
+func handleBinanceAccountSummary(msg string) (data *string, status int, err error) {
+	creds, parseErr := parseBinanceAuthenticatedRequest(msg)
+	if parseErr != nil {
+		return nil, 0, parseErr
+	}
+
+	account, fetchErr := fetchBinanceSpotAccount(creds.APIKey, creds.SecretKey)
 	if fetchErr != nil {
 		return nil, 0, fetchErr
 	}
@@ -246,8 +257,13 @@ func handleBinanceAccountSummary(_ string) (data *string, status int, err error)
 // handleBinanceAccountPnl fetches authenticated Binance futures account metrics,
 // builds an account-PnL payload, signs it via the TEE node key, and returns
 // ABI-encoded (payload, signature).
-func handleBinanceAccountPnl(_ string) (data *string, status int, err error) {
-	account, fetchErr := fetchBinanceFuturesAccount()
+func handleBinanceAccountPnl(msg string) (data *string, status int, err error) {
+	creds, parseErr := parseBinanceAuthenticatedRequest(msg)
+	if parseErr != nil {
+		return nil, 0, parseErr
+	}
+
+	account, fetchErr := fetchBinanceFuturesAccount(creds.APIKey, creds.SecretKey)
 	if fetchErr != nil {
 		return nil, 0, fetchErr
 	}
@@ -524,6 +540,26 @@ func parseBinanceFetchRequest(raw []byte) (*BinanceFetchRequest, error) {
 	return &req, nil
 }
 
+func parseBinanceAuthenticatedRequest(msg string) (*BinanceAuthenticatedRequest, error) {
+	if strings.TrimSpace(msg) == "" {
+		return &BinanceAuthenticatedRequest{}, nil
+	}
+
+	msgBytes, hexErr := base.HexToBytes(msg)
+	if hexErr != nil {
+		return nil, fmt.Errorf("invalid hex in originalMessage: %v", hexErr)
+	}
+
+	var req BinanceAuthenticatedRequest
+	if err := json.Unmarshal(msgBytes, &req); err != nil {
+		return nil, fmt.Errorf("invalid request payload: expected JSON {\"apiKey\":\"...\",\"secretKey\":\"...\"}")
+	}
+
+	req.APIKey = strings.TrimSpace(req.APIKey)
+	req.SecretKey = strings.TrimSpace(req.SecretKey)
+	return &req, nil
+}
+
 func fetchBinanceTicker(symbol string) (*BinanceTickerPriceResponse, error) {
 	endpoint := fmt.Sprintf("%s/api/v3/ticker/price?symbol=%s", strings.TrimRight(binanceAPIBaseURL, "/"), url.QueryEscape(symbol))
 
@@ -562,11 +598,11 @@ func fetchBinanceTicker(symbol string) (*BinanceTickerPriceResponse, error) {
 	return &ticker, nil
 }
 
-func fetchBinanceFuturesAccount() (*BinanceFuturesAccountResponse, error) {
-	apiKey := strings.TrimSpace(BinanceAPIKey())
-	apiSecret := strings.TrimSpace(BinanceSecretKey())
+func fetchBinanceFuturesAccount(apiKeyOverride, apiSecretOverride string) (*BinanceFuturesAccountResponse, error) {
+	apiKey := strings.TrimSpace(apiKeyOverride)
+	apiSecret := strings.TrimSpace(apiSecretOverride)
 	if apiKey == "" || apiSecret == "" {
-		return nil, fmt.Errorf("BINANCE_API_KEY and BINANCE_SECRET_KEY are required for account PnL")
+		return nil, fmt.Errorf("apiKey and secretKey are required for account PnL")
 	}
 
 	timestamp := time.Now().UnixMilli()
@@ -641,11 +677,11 @@ func signBinanceQuery(secret, query string) string {
 	return fmt.Sprintf("%x", mac.Sum(nil))
 }
 
-func fetchBinanceSpotAccount() (*BinanceSpotAccountResponse, error) {
-	apiKey := strings.TrimSpace(BinanceAPIKey())
-	apiSecret := strings.TrimSpace(BinanceSecretKey())
+func fetchBinanceSpotAccount(apiKeyOverride, apiSecretOverride string) (*BinanceSpotAccountResponse, error) {
+	apiKey := strings.TrimSpace(apiKeyOverride)
+	apiSecret := strings.TrimSpace(apiSecretOverride)
 	if apiKey == "" || apiSecret == "" {
-		return nil, fmt.Errorf("BINANCE_API_KEY and BINANCE_SECRET_KEY are required for account summary")
+		return nil, fmt.Errorf("apiKey and secretKey are required for account summary")
 	}
 
 	timestamp := time.Now().UnixMilli()
@@ -718,4 +754,143 @@ func decimalToString(v *big.Float) string {
 		return "0"
 	}
 	return strings.TrimRight(strings.TrimRight(v.Text('f', 8), "0"), ".")
+}
+
+// handleBinanceProfileGrowth fetches daily portfolio snapshots from Binance, computes
+// the BTC-denominated growth percentage over windowDays, and returns ABI-encoded
+// (payload, signature) signed by the TEE node key.
+func handleBinanceProfileGrowth(msg string) (data *string, status int, err error) {
+	msgBytes, hexErr := base.HexToBytes(msg)
+	if hexErr != nil {
+		return nil, 0, fmt.Errorf("invalid hex in originalMessage: %v", hexErr)
+	}
+
+	var req BinanceProfileGrowthRequest
+	if err := json.Unmarshal(msgBytes, &req); err != nil {
+		return nil, 0, fmt.Errorf("invalid request payload: expected JSON {\"apiKey\":\"...\",\"secretKey\":\"...\",\"wallet\":\"...\"}")
+	}
+
+	req.APIKey = strings.TrimSpace(req.APIKey)
+	req.SecretKey = strings.TrimSpace(req.SecretKey)
+	req.Wallet = strings.TrimSpace(req.Wallet)
+
+	if req.APIKey == "" || req.SecretKey == "" {
+		return nil, 0, fmt.Errorf("apiKey and secretKey are required")
+	}
+	if req.Wallet == "" {
+		return nil, 0, fmt.Errorf("wallet address is required")
+	}
+
+	windowDays := req.WindowDays
+	if windowDays <= 0 {
+		windowDays = 7
+	}
+
+	snapshots, fetchErr := fetchBinanceAccountSnapshot(req.APIKey, req.SecretKey, windowDays)
+	if fetchErr != nil {
+		return nil, 0, fetchErr
+	}
+	if len(snapshots) < 2 {
+		return nil, 0, fmt.Errorf("not enough snapshots returned (got %d, need at least 2)", len(snapshots))
+	}
+
+	first := snapshots[0]
+	last := snapshots[len(snapshots)-1]
+
+	startBTC, ok := new(big.Float).SetString(first.Data.TotalAssetOfBtc)
+	if !ok {
+		return nil, 0, fmt.Errorf("invalid startBTC value: %q", first.Data.TotalAssetOfBtc)
+	}
+	endBTC, ok := new(big.Float).SetString(last.Data.TotalAssetOfBtc)
+	if !ok {
+		return nil, 0, fmt.Errorf("invalid endBTC value: %q", last.Data.TotalAssetOfBtc)
+	}
+
+	growthPercent := "0.00"
+	if startBTC.Sign() > 0 {
+		diff := new(big.Float).Sub(endBTC, startBTC)
+		pct := new(big.Float).Mul(new(big.Float).Quo(diff, startBTC), big.NewFloat(100))
+		growthPercent = strings.TrimRight(strings.TrimRight(pct.Text('f', 2), "0"), ".")
+	}
+
+	payload := BinanceProfileGrowthPayload{
+		Source:     "binance-profile-growth",
+		Wallet:     req.Wallet,
+		WindowDays: windowDays,
+		StartSnapshot: BinanceSnapshotPoint{
+			Date:     msEpochToDate(first.UpdateTime),
+			TotalBTC: first.Data.TotalAssetOfBtc,
+		},
+		EndSnapshot: BinanceSnapshotPoint{
+			Date:     msEpochToDate(last.UpdateTime),
+			TotalBTC: last.Data.TotalAssetOfBtc,
+		},
+		GrowthPercent: growthPercent,
+		FetchedAt:     time.Now().Unix(),
+		Version:       Version,
+	}
+
+	payloadBytes, marshalErr := json.Marshal(payload)
+	if marshalErr != nil {
+		return nil, 0, fmt.Errorf("failed to marshal profile growth payload: %v", marshalErr)
+	}
+
+	signature, signErr := signViaNode(payloadBytes)
+	if signErr != nil {
+		return nil, 0, fmt.Errorf("signing failed: %v", signErr)
+	}
+
+	encoded, abiErr := abiEncodeTwo(payloadBytes, signature)
+	if abiErr != nil {
+		return nil, 0, fmt.Errorf("ABI encoding failed: %v", abiErr)
+	}
+
+	lastBinanceAt = payload.FetchedAt
+
+	dataHex := base.BytesToHex(encoded)
+	return &dataHex, 1, nil
+}
+
+// fetchBinanceAccountSnapshot fetches daily portfolio snapshots from Binance.
+// limit controls how many days of history to fetch (7 or 30).
+func fetchBinanceAccountSnapshot(apiKey, apiSecret string, limit int) ([]BinanceSnapshotVo, error) {
+	timestamp := time.Now().UnixMilli()
+	query := fmt.Sprintf("type=SPOT&limit=%d&timestamp=%d&recvWindow=5000", limit, timestamp)
+	signature := signBinanceQuery(apiSecret, query)
+
+	endpoint := fmt.Sprintf("%s/sapi/v1/accountSnapshot?%s&signature=%s",
+		strings.TrimRight(binanceAPIBaseURL, "/"), query, signature)
+
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create snapshot request: %w", err)
+	}
+	req.Header.Set("X-MBX-APIKEY", apiKey)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch account snapshot: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("binance snapshot returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result BinanceAccountSnapshotResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode snapshot response: %w", err)
+	}
+
+	if len(result.SnapshotVos) == 0 {
+		return nil, fmt.Errorf("binance returned 0 snapshots")
+	}
+
+	return result.SnapshotVos, nil
+}
+
+// msEpochToDate converts a millisecond-epoch timestamp to a "YYYY-MM-DD" string (UTC).
+func msEpochToDate(ms int64) string {
+	return time.UnixMilli(ms).UTC().Format("2006-01-02")
 }
