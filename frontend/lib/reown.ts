@@ -33,6 +33,7 @@ const flareNetwork: AppKitNetwork = {
 const wagmiAdapter = new WagmiAdapter({
   networks: [flareNetwork, mainnet],
   projectId,
+  ssr: true,
 })
 
 // Solana adapter
@@ -203,6 +204,12 @@ if (!globalThis.__flexProverAppKitInitialized__) {
     defaultNetwork: flareNetwork,
     projectId,
     siwx,
+    metadata: {
+      name: 'FlexProver',
+      description: 'Sybil-resistant reputation engine. Bind your CEX PNL to your wallet identity using secure Flare TEE enclaves.',
+      url: process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000',
+      icons: [`${process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'}/icon.svg`],
+    },
     features: { analytics: false },
   })
   globalThis.__flexProverAppKitInitialized__ = true

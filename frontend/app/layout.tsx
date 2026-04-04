@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
+import { headers } from 'next/headers'
 import { Analytics } from '@vercel/analytics/next'
 import { Providers } from './providers'
 import './globals.css'
@@ -22,13 +23,16 @@ export const metadata: Metadata = {
   },
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  const headersList = await headers()
+  const cookies = headersList.get('cookie')
+
   return (
     <html lang="en">
       <body className="font-sans antialiased">
-        <Providers>
+        <Providers cookies={cookies}>
           {children}
         </Providers>
         <Analytics />
