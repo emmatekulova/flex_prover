@@ -63,24 +63,53 @@ cp config/proxy/extension_proxy.toml.example config/proxy/extension_proxy.toml
 # Edit .env with your private key and settings
 
 # 2. Deploy contract
-cd <language>/tools
-# run deploy-contract command for your language
+cd fce-sign/go/tools
+go run ./cmd/deploy-contract
+# → copy the printed address into INSTRUCTION_SENDER in .env
 
 # 3. Register extension
-# run register-extension command
+go run ./cmd/register-extension
+# → copy the printed extension ID into EXTENSION_ID in .env
 
 # 4. Start the stack
+cd ../../..   # back to repo root
 docker compose build && docker compose up -d
 
 # 5. Expose via tunnel
 cloudflared tunnel --url http://localhost:6676
+# → copy the https://... URL into TUNNEL_URL in .env
 
 # 6. Register TEE version + machine
-# run allow-tee-version and register-tee commands
+cd fce-sign/go/tools
+go run ./cmd/allow-tee-version
+go run ./cmd/register-tee
 
-# 7. Test
-# run run-test command
+# 7. Run an attestation (from repo root)
+#    The attest command automatically sets the extension ID on first run.
+./run-attest.sh -mode growth -lookbackDays 7 -apiKey YOUR_KEY -secretKey YOUR_SECRET
+# or, using flags directly from the tools directory:
+cd fce-sign/go/tools
+go run ./cmd/attest -mode growth -lookbackDays 7 -apiKey YOUR_KEY -secretKey YOUR_SECRET
 ```
+
+### Contract verification on Flare Coston2 Explorer
+
+After deploying `InstructionSender`, verify it on [Coston2 Explorer](https://coston2-explorer.flare.network/) so that the ABI and source are publicly visible:
+
+```bash
+# From fce-sign/contract/:
+forge verify-contract \
+  --chain-id 114 \
+  --rpc-url https://coston2-api.flare.network/ext/C/rpc \
+  --etherscan-api-key any \
+  --verifier blockscout \
+  --verifier-url https://coston2-explorer.flare.network/api/ \
+  <INSTRUCTION_SENDER_ADDRESS> \
+  InstructionSender.sol:InstructionSender \
+  --constructor-args $(cast abi-encode "constructor(address,address)" <TEE_EXTENSION_REGISTRY> <TEE_MACHINE_REGISTRY>)
+```
+
+Replace `<INSTRUCTION_SENDER_ADDRESS>`, `<TEE_EXTENSION_REGISTRY>`, and `<TEE_MACHINE_REGISTRY>` with the values from your `.env` and `config/coston2/deployed-addresses.json`.
 
 ## Status
 

@@ -61,9 +61,14 @@ func main() {
 
 	defaultInstructionSender := os.Getenv("INSTRUCTION_SENDER")
 
+	defaultProxyURL := os.Getenv("TUNNEL_URL")
+	if defaultProxyURL == "" {
+		defaultProxyURL = base.DefaultExtensionProxyURL
+	}
+
 	af := flag.String("a", base.DefaultAddressesFile, "deployed addresses JSON file")
 	cf := flag.String("c", base.DefaultChainNodeURL, "chain RPC URL")
-	pf := flag.String("p", base.DefaultExtensionProxyURL, "extension proxy URL (e.g. http://localhost:6676)")
+	pf := flag.String("p", defaultProxyURL, "extension proxy URL (e.g. http://localhost:6676 or tunnel URL)")
 	isf := flag.String("instructionSender", defaultInstructionSender, "InstructionSender contract address (or set INSTRUCTION_SENDER in .env)")
 	modef := flag.String("mode", "ticker", "attestation mode: ticker | stats | pnl | account | profile | growth")
 	cexf := flag.String("cex", "binance", "CEX provider name")
@@ -99,6 +104,13 @@ func run(
 	timeout time.Duration,
 ) error {
 	mode = strings.ToLower(strings.TrimSpace(mode))
+
+	// Step 0: ensure the InstructionSender contract has its extension ID set.
+	// This is idempotent — it is skipped if the ID is already set.
+	logger.Infof("Ensuring extension ID is set on InstructionSender %s...", instructionSenderAddr.Hex())
+	if err := app.SetExtensionId(s, instructionSenderAddr); err != nil {
+		return errors.Errorf("set extension ID: %s", err)
+	}
 
 	// Step 1: fetch the TEE node's public key and encrypt credentials if needed.
 	var encryptedCredsHex string
