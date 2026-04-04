@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -136,6 +137,78 @@ func (b *BinanceProvider) FetchUserProfile(apiKey, secretKey string) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
+	return json.Marshal(payload)
+}
+
+// FetchPortfolioGrowth fetches daily account snapshots and computes portfolio growth.
+// Uses Binance signed endpoint GET /sapi/v1/accountSnapshot with type=SPOT.
+func (b *BinanceProvider) FetchPortfolioGrowth(apiKey, secretKey string, lookbackDays int) ([]byte, error) {
+	if lookbackDays <= 0 {
+		lookbackDays = 7
+	}
+	if lookbackDays > 29 {
+		lookbackDays = 29
+	}
+
+	snapshots, err := fetchBinanceSpotAccountSnapshots(apiKey, secretKey, lookbackDays+1)
+	if err != nil {
+		return nil, err
+	}
+	if len(snapshots) < 2 {
+		return nil, fmt.Errorf("not enough snapshots to compute growth")
+	}
+
+	sort.Slice(snapshots, func(i, j int) bool {
+		return snapshots[i].UpdateTime < snapshots[j].UpdateTime
+	})
+
+	start := snapshots[0]
+	end := snapshots[len(snapshots)-1]
+
+	startBtc, ok := new(big.Float).SetString(start.Data.TotalAssetOfBtc)
+	if !ok {
+		return nil, fmt.Errorf("invalid start totalAssetOfBtc: %q", start.Data.TotalAssetOfBtc)
+	}
+	endBtc, ok := new(big.Float).SetString(end.Data.TotalAssetOfBtc)
+	if !ok {
+		return nil, fmt.Errorf("invalid end totalAssetOfBtc: %q", end.Data.TotalAssetOfBtc)
+	}
+
+	growthBtc := new(big.Float).Sub(endBtc, startBtc)
+	growthPct := new(big.Float)
+	if startBtc.Sign() != 0 {
+		growthPct.Quo(growthBtc, startBtc)
+		growthPct.Mul(growthPct, big.NewFloat(100))
+	}
+
+	btcTicker, err := fetchBinanceTicker("", "BTCUSDT")
+	if err != nil {
+		return nil, err
+	}
+	btcUsdtPrice, ok := new(big.Float).SetString(btcTicker.Price)
+	if !ok {
+		return nil, fmt.Errorf("invalid BTCUSDT price: %q", btcTicker.Price)
+	}
+	growthUsdt := new(big.Float).Mul(growthBtc, btcUsdtPrice)
+
+	payload := BinancePortfolioGrowthAttestationPayload{
+		Source:        "binance-portfolio-growth",
+		LookbackDays:  lookbackDays,
+		SnapshotCount: len(snapshots),
+		StartTime:     start.UpdateTime / 1000,
+		EndTime:       end.UpdateTime / 1000,
+		StartTotalBtc: decimalToString(startBtc),
+		EndTotalBtc:   decimalToString(endBtc),
+		GrowthBtc:     decimalToString(growthBtc),
+		GrowthPercent: decimalToString(growthPct),
+		BtcUsdtPrice:  btcTicker.Price,
+		GrowthUsdt:    decimalToString(growthUsdt),
+		FetchedAt:     time.Now().Unix(),
+		Version:       Version,
+	}
+
+	lastBinanceAt = payload.FetchedAt
+
 	return json.Marshal(payload)
 }
 
@@ -407,6 +480,52 @@ func fetchBinanceAllSpotPrices() (map[string]*big.Float, error) {
 	}
 
 	return result, nil
+}
+
+func fetchBinanceSpotAccountSnapshots(apiKey, secretKey string, limit int) ([]BinanceAccountSnapshotVo, error) {
+	apiKey = strings.TrimSpace(apiKey)
+	secretKey = strings.TrimSpace(secretKey)
+	if apiKey == "" || secretKey == "" {
+		return nil, fmt.Errorf("apiKey and secretKey are required for portfolio growth")
+	}
+	if limit < 2 {
+		limit = 2
+	}
+	if limit > 30 {
+		limit = 30
+	}
+
+	timestamp := time.Now().UnixMilli()
+	query := fmt.Sprintf("type=SPOT&limit=%d&timestamp=%d&recvWindow=5000", limit, timestamp)
+	signature := signBinanceQuery(secretKey, query)
+
+	endpoint := fmt.Sprintf("%s/sapi/v1/accountSnapshot?%s&signature=%s", strings.TrimRight(binanceAPIBaseURL, "/"), query, signature)
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create snapshot request: %w", err)
+	}
+	req.Header.Set("X-MBX-APIKEY", apiKey)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch Binance account snapshots: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("binance accountSnapshot returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	var out BinanceAccountSnapshotResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("failed to decode Binance account snapshot response: %w", err)
+	}
+	if len(out.SnapshotVos) == 0 {
+		return nil, fmt.Errorf("binance account snapshot response is empty")
+	}
+
+	return out.SnapshotVos, nil
 }
 
 func signBinanceQuery(secret, query string) string {

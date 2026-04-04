@@ -191,6 +191,13 @@ func handleCEXUserProfile(msg string) (data *string, status int, err error) {
 	if err != nil {
 		return nil, 0, err
 	}
+	if req.LookbackDays > 0 {
+		payloadBytes, err := provider.FetchPortfolioGrowth(apiKey, secretKey, req.LookbackDays)
+		if err != nil {
+			return nil, 0, err
+		}
+		return signAndEncode(payloadBytes)
+	}
 
 	var payloadBytes []byte
 	// Use structured ABI encoding if the provider supports it (required by BinanceAttestationStore).

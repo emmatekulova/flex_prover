@@ -35,6 +35,7 @@ type CEXRequest struct {
 	CEX                  string `json:"cex"`                            // e.g. "binance", "bybit"
 	EncryptedCredentials string `json:"encryptedCredentials,omitempty"` // hex-encoded ECIES ciphertext of CEXCredentials JSON
 	Symbol               string `json:"symbol,omitempty"`               // for ticker/stats requests
+	LookbackDays         int    `json:"lookbackDays,omitempty"`         // for portfolio growth requests
 }
 
 // CEXCredentials holds plaintext credentials, used only inside the TEE after decryption.
@@ -163,4 +164,36 @@ type BinanceAccountPnlAttestationPayload struct {
 	TotalMarginBalance    string `json:"totalMarginBalance"`
 	FetchedAt             int64  `json:"fetchedAt"`
 	Version               string `json:"version"`
+}
+
+type BinanceAccountSnapshotData struct {
+	TotalAssetOfBtc string `json:"totalAssetOfBtc"`
+}
+
+type BinanceAccountSnapshotVo struct {
+	Data       BinanceAccountSnapshotData `json:"data"`
+	Type       string                     `json:"type"`
+	UpdateTime int64                      `json:"updateTime"`
+}
+
+type BinanceAccountSnapshotResponse struct {
+	Code        int                        `json:"code"`
+	Msg         string                     `json:"msg"`
+	SnapshotVos []BinanceAccountSnapshotVo `json:"snapshotVos"`
+}
+
+type BinancePortfolioGrowthAttestationPayload struct {
+	Source          string `json:"source"`
+	LookbackDays    int    `json:"lookbackDays"`
+	SnapshotCount   int    `json:"snapshotCount"`
+	StartTime       int64  `json:"startTime"`
+	EndTime         int64  `json:"endTime"`
+	StartTotalBtc   string `json:"startTotalBtc"`
+	EndTotalBtc     string `json:"endTotalBtc"`
+	GrowthBtc       string `json:"growthBtc"`
+	GrowthPercent   string `json:"growthPercent"`
+	BtcUsdtPrice    string `json:"btcUsdtPrice"`
+	GrowthUsdt      string `json:"growthUsdt"`
+	FetchedAt       int64  `json:"fetchedAt"`
+	Version         string `json:"version"`
 }

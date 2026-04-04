@@ -46,6 +46,7 @@ type cexRequest struct {
 	CEX                  string `json:"cex"`
 	EncryptedCredentials string `json:"encryptedCredentials,omitempty"`
 	Symbol               string `json:"symbol,omitempty"`
+	LookbackDays         int    `json:"lookbackDays,omitempty"`
 }
 
 // cexCredentials is encrypted and embedded in the request.
@@ -64,11 +65,12 @@ func main() {
 	cf := flag.String("c", base.DefaultChainNodeURL, "chain RPC URL")
 	pf := flag.String("p", base.DefaultExtensionProxyURL, "extension proxy URL (e.g. http://localhost:6676)")
 	isf := flag.String("instructionSender", defaultInstructionSender, "InstructionSender contract address (or set INSTRUCTION_SENDER in .env)")
-	modef := flag.String("mode", "ticker", "attestation mode: ticker | stats | pnl | account | profile")
+	modef := flag.String("mode", "ticker", "attestation mode: ticker | stats | pnl | account | profile | growth")
 	cexf := flag.String("cex", "binance", "CEX provider name")
 	symbolf := flag.String("symbol", "BTCUSDT", "trading pair symbol (ticker/stats modes)")
-	apiKeyf := flag.String("apiKey", "", "CEX API key (required for pnl/account/profile)")
-	secretKeyf := flag.String("secretKey", "", "CEX secret key (required for pnl/account/profile)")
+	lookbackDaysf := flag.Int("lookbackDays", 7, "lookback window in days for growth mode (1-29)")
+	apiKeyf := flag.String("apiKey", "", "CEX API key (required for pnl/account/profile/growth)")
+	secretKeyf := flag.String("secretKey", "", "CEX secret key (required for pnl/account/profile/growth)")
 	timeoutf := flag.Duration("timeout", 120*time.Second, "poll timeout for TEE result")
 	flag.Parse()
 
@@ -83,7 +85,7 @@ func main() {
 		logger.Fatal(err)
 	}
 
-	if err := run(s, instructionSenderAddr, *pf, *modef, *cexf, *symbolf, *apiKeyf, *secretKeyf, *timeoutf); err != nil {
+	if err := run(s, instructionSenderAddr, *pf, *modef, *cexf, *symbolf, *lookbackDaysf, *apiKeyf, *secretKeyf, *timeoutf); err != nil {
 		logger.Fatal(err)
 	}
 }
@@ -91,7 +93,9 @@ func main() {
 func run(
 	s *base.Support,
 	instructionSenderAddr common.Address,
-	proxyURL, mode, cex, symbol, apiKey, secretKey string,
+	proxyURL, mode, cex, symbol string,
+	lookbackDays int,
+	apiKey, secretKey string,
 	timeout time.Duration,
 ) error {
 	mode = strings.ToLower(strings.TrimSpace(mode))
@@ -132,6 +136,12 @@ func run(
 		CEX:                  cex,
 		EncryptedCredentials: encryptedCredsHex,
 		Symbol:               strings.ToUpper(strings.TrimSpace(symbol)),
+	}
+	if mode == "growth" {
+		if lookbackDays < 1 || lookbackDays > 29 {
+			return errors.Errorf("lookbackDays must be in [1,29]")
+		}
+		req.LookbackDays = lookbackDays
 	}
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
@@ -203,8 +213,12 @@ func selectContractFunc(mode string) (func(*contract.InstructionSender, *bind.Tr
 		return func(s *contract.InstructionSender, opts *bind.TransactOpts, msg []byte) (*ethtypes.Transaction, error) {
 			return s.FetchBinanceUserProfileAndAttest(opts, msg)
 		}, nil
+	case "growth":
+		return func(s *contract.InstructionSender, opts *bind.TransactOpts, msg []byte) (*ethtypes.Transaction, error) {
+			return s.FetchBinanceUserProfileAndAttest(opts, msg)
+		}, nil
 	default:
-		return nil, errors.Errorf("unknown mode %q — use: ticker, stats, pnl, account, profile", mode)
+		return nil, errors.Errorf("unknown mode %q — use: ticker, stats, pnl, account, profile, growth", mode)
 	}
 }
 

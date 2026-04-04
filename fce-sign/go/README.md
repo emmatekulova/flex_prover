@@ -147,17 +147,20 @@ go run ./cmd/attest -mode ticker -symbol BTCUSDT
 go run ./cmd/attest -mode profile -apiKey YOUR_KEY -secretKey YOUR_SECRET
 go run ./cmd/attest -mode account -apiKey YOUR_KEY -secretKey YOUR_SECRET
 go run ./cmd/attest -mode pnl    -apiKey YOUR_KEY -secretKey YOUR_SECRET
+go run ./cmd/attest -mode growth -lookbackDays 7 -apiKey YOUR_KEY -secretKey YOUR_SECRET
 go run ./cmd/attest -mode stats  -symbol ETHUSDT
 ```
 
-The tool prints the instruction ID, payload, and TEE signature:
+The tool prints the transaction hash, instruction ID, payload, and TEE signature:
 ```
 INF Credentials encrypted (113 bytes ciphertext)
 INF Sending profile attestation for CEX=binance...
-INF Instruction submitted. ID: 0x<hash>
+INF Transaction submitted: 0x<txHash>
+INF Explorer: https://coston2-explorer.flare.network/tx/0x<txHash>
+INF Instruction ID: 0x<instructionId>
 INF Waiting for TEE result...
 INF === Attestation Result ===
-INF Instruction ID:    0x<hash>
+INF Instruction ID:    0x<instructionId>
 INF Signature (hex):   7147...
 INF Payload:           {"source":"binance-user-profile","uid":...}
 ```
@@ -171,6 +174,7 @@ INF Payload:           {"source":"binance-user-profile","uid":...}
 | `account` | `/api/v3/account` | Yes |
 | `pnl` | `/fapi/v2/account` | Yes + futures |
 | `profile` | `/api/v3/account` (full profile) | Yes |
+| `growth` | `/sapi/v1/accountSnapshot?type=SPOT` | Yes |
 
 ## Local handler test (no chain)
 

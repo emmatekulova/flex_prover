@@ -21,6 +21,7 @@ type CEXProvider interface {
 	FetchAccountPnl(apiKey, secretKey string) ([]byte, error)
 	FetchAccountSummary(apiKey, secretKey string) ([]byte, error)
 	FetchUserProfile(apiKey, secretKey string) ([]byte, error)
+	FetchPortfolioGrowth(apiKey, secretKey string, lookbackDays int) ([]byte, error)
 }
 
 // ABIEncoderProvider is an optional interface for providers (like Binance) that
