@@ -22,19 +22,11 @@ export const flare = defineChain({
   },
 })
 
-// AppKit network object for Flare (CAIP format)
+// AppKit network object — derived from the viem chain definition to avoid duplicate RPC/explorer URLs
 const flareNetwork: AppKitNetwork = {
-  id: 14,
-  name: 'Flare',
+  ...flare,
   caipNetworkId: 'eip155:14' as const,
   chainNamespace: 'eip155' as const,
-  nativeCurrency: { name: 'Flare', symbol: 'FLR', decimals: 18 },
-  rpcUrls: {
-    default: { http: ['https://flare-api.flare.network/ext/C/rpc'] },
-  },
-  blockExplorers: {
-    default: { name: 'Flarescan', url: 'https://flarescan.com' },
-  },
 }
 
 // Wagmi adapter — EVM chains (Flare + Ethereum)
@@ -66,7 +58,7 @@ const siwx: SIWXConfig = {
     let messageString: string
 
     if (isEvm) {
-      const chainIdNum = parseInt(input.chainId.split(':')[1]!)
+      const chainIdNum = parseInt(input.chainId.split(':')[1]!, 10)
       messageString = createSiweMessage({
         domain,
         address: input.accountAddress as `0x${string}`,
