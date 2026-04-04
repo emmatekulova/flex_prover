@@ -94,11 +94,36 @@ export default function FlexProver() {
   const [docsOpen, setDocsOpen] = useState(false)
   const [copiedLink, setCopiedLink] = useState(false)
 
-  // Wallet state
+  // Wallet state — driven by iron-session (populated after SIWX verification)
   const [walletConnected, setWalletConnected] = useState(false)
-  const [walletAddress] = useState("0x1234...5678")
-  const [ensName] = useState("flexer.eth")
-  const [hasEns] = useState(true)
+  const [walletAddress, setWalletAddress] = useState<string | null>(null)
+  const [ensName] = useState<string | null>(null)
+  const hasEns = false // ENS lookup not yet implemented; placeholder for future task
+
+  // Poll the server session so the UI reflects iron-session state
+  useEffect(() => {
+    let cancelled = false
+    const check = async () => {
+      try {
+        const res = await fetch('/api/auth/siwx?action=session')
+        if (!res.ok || cancelled) return
+        const data = (await res.json()) as { address?: string | null }
+        if (!cancelled) {
+          setWalletAddress(data.address ?? null)
+          setWalletConnected(!!data.address)
+        }
+      } catch {
+        // network error — leave state unchanged
+      }
+    }
+    void check()
+    // Re-check every 2 s so the UI picks up the session after AppKit SIWX completes
+    const interval = setInterval(() => void check(), 2000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [])
 
   // API Key state
   const [apiKey, setApiKey] = useState("")
@@ -183,10 +208,6 @@ export default function FlexProver() {
     setAppState("celebration")
   }
 
-  const connectWallet = () => {
-    setWalletConnected(true)
-  }
-
   const verifyApiKey = () => {
     if (apiKey.length > 0) {
       setApiVerified(true)
@@ -242,7 +263,7 @@ export default function FlexProver() {
   const resetApp = () => {
     setAppState("landing")
     setCurrentStep(1)
-    setWalletConnected(false)
+    // Wallet state is managed by AppKit + iron-session; just reset UI
     setApiKey("")
     setApiVerified(false)
     setLogoRevealed(false)
@@ -467,15 +488,12 @@ export default function FlexProver() {
                           </p>
                         </div>
 
-                        {!walletConnected ? (
-                          <Button
-                            onClick={connectWallet}
-                            className="w-full h-14 bg-secondary hover:bg-secondary/80 border border-border text-foreground"
-                          >
-                            <Wallet className="w-5 h-5 mr-3" />
-                            Connect MetaMask
-                          </Button>
-                        ) : (
+                        {/* AppKit handles wallet connection + SIWX signing in one flow */}
+                        <div className="flex justify-center">
+                          <appkit-button />
+                        </div>
+
+                        {walletConnected && walletAddress && (
                           <div className="space-y-4">
                             <div className="p-4 rounded-xl bg-secondary/50 border border-border">
                               <div className="flex items-center justify-between">
@@ -484,15 +502,17 @@ export default function FlexProver() {
                                     <Wallet className="w-5 h-5 text-primary" />
                                   </div>
                                   <div>
-                                    <p className="font-medium text-foreground">{walletAddress}</p>
-                                    <p className="text-sm text-muted-foreground">Connected</p>
+                                    <p className="font-medium text-foreground font-mono text-sm">
+                                      {walletAddress.slice(0, 6)}…{walletAddress.slice(-4)}
+                                    </p>
+                                    <p className="text-sm text-muted-foreground">Verified via SIWX</p>
                                   </div>
                                 </div>
                                 <CheckCircle2 className="w-5 h-5 text-primary" />
                               </div>
                             </div>
 
-                            {hasEns ? (
+                            {hasEns && ensName ? (
                               <div className="p-4 rounded-xl bg-primary/10 border border-primary/20">
                                 <div className="flex items-center gap-2 mb-1">
                                   <span className="text-xs text-muted-foreground">
@@ -502,11 +522,11 @@ export default function FlexProver() {
                                 <p className="text-xl font-bold text-foreground">{ensName}</p>
                               </div>
                             ) : (
-                              <div className="p-4 rounded-xl bg-destructive/10 border border-destructive/20">
+                              <div className="p-4 rounded-xl bg-secondary/30 border border-border/50">
                                 <div className="flex items-center gap-2">
-                                  <AlertTriangle className="w-4 h-4 text-destructive" />
-                                  <span className="text-sm text-destructive">
-                                    No ENS found. Identity binding requires an ENS name.
+                                  <AlertTriangle className="w-4 h-4 text-muted-foreground" />
+                                  <span className="text-sm text-muted-foreground">
+                                    No ENS name detected. ENS lookup coming soon.
                                   </span>
                                 </div>
                               </div>
@@ -818,7 +838,7 @@ export default function FlexProver() {
                               Live Preview
                             </h3>
                             <FlexCard
-                              ensName={ensName}
+                              ensName={ensName ?? walletAddress?.slice(0, 6) ?? 'unknown.eth'}
                               trade={selectedTrade || undefined}
                               showPnl={flexOptions.showPnl}
                               showEntryExit={flexOptions.showEntryExit}
@@ -1046,7 +1066,7 @@ export default function FlexProver() {
                   transition={{ delay: 0.4 }}
                 >
                   <FlexCard
-                    ensName={ensName}
+                    ensName={ensName ?? walletAddress?.slice(0, 6) ?? 'unknown.eth'}
                     trade={selectedTrade || undefined}
                     showPnl={flexOptions.showPnl}
                     showEntryExit={flexOptions.showEntryExit}
