@@ -135,9 +135,9 @@ func handleBinanceUserProfile(_ string) (data *string, status int, err error) {
 		Version:             Version,
 	}
 
-	payloadBytes, marshalErr := json.Marshal(payload)
-	if marshalErr != nil {
-		return nil, 0, fmt.Errorf("failed to marshal user profile payload: %v", marshalErr)
+	payloadBytes, encodeErr := abiEncodeUserProfile(payload)
+	if encodeErr != nil {
+		return nil, 0, fmt.Errorf("failed to ABI-encode user profile payload: %v", encodeErr)
 	}
 
 	signature, signErr := signViaNode(payloadBytes)

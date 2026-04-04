@@ -3,6 +3,8 @@ package app
 import (
 	"fmt"
 	"math/big"
+
+	"github.com/ethereum/go-ethereum/accounts/abi"
 )
 
 // abiEncodeTwo ABI-encodes two dynamic byte arrays: (bytes, bytes).
@@ -65,6 +67,76 @@ func abiReadBytes(data []byte, offset int64) ([]byte, error) {
 		return nil, fmt.Errorf("bytes data out of range")
 	}
 	return data[start : start+length], nil
+}
+
+// abiEncodeUserProfile ABI-encodes a BinanceUserProfileAttestationPayload as a
+// Solidity tuple so BinanceAttestationStore can abi.decode it on-chain and emit
+// named typed event fields instead of opaque bytes.
+func abiEncodeUserProfile(p BinanceUserProfileAttestationPayload) ([]byte, error) {
+	assetComponents := []abi.ArgumentMarshaling{
+		{Name: "asset", Type: "string"},
+		{Name: "total", Type: "string"},
+		{Name: "estimatedUsdt", Type: "string"},
+	}
+	profileType, err := abi.NewType("tuple", "", []abi.ArgumentMarshaling{
+		{Name: "source", Type: "string"},
+		{Name: "uid", Type: "uint64"},
+		{Name: "accountType", Type: "string"},
+		{Name: "permissions", Type: "string[]"},
+		{Name: "canTrade", Type: "bool"},
+		{Name: "canDeposit", Type: "bool"},
+		{Name: "canWithdraw", Type: "bool"},
+		{Name: "estimatedTotalUsdt", Type: "string"},
+		{Name: "unsupportedAssetCount", Type: "uint256"},
+		{Name: "assets", Type: "tuple[]", Components: assetComponents},
+		{Name: "fetchedAt", Type: "uint256"},
+		{Name: "version", Type: "string"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build ABI type: %v", err)
+	}
+
+	type AssetABI struct {
+		Asset         string
+		Total         string
+		EstimatedUsdt string
+	}
+	type ProfileABI struct {
+		Source                string
+		Uid                   uint64
+		AccountType           string
+		Permissions           []string
+		CanTrade              bool
+		CanDeposit            bool
+		CanWithdraw           bool
+		EstimatedTotalUsdt    string
+		UnsupportedAssetCount *big.Int
+		Assets                []AssetABI
+		FetchedAt             *big.Int
+		Version               string
+	}
+
+	assets := make([]AssetABI, len(p.Assets))
+	for i, a := range p.Assets {
+		assets[i] = AssetABI{Asset: a.Asset, Total: a.Total, EstimatedUsdt: a.EstimatedUSDT}
+	}
+
+	profile := ProfileABI{
+		Source:                p.Source,
+		Uid:                   uint64(p.UID),
+		AccountType:           p.AccountType,
+		Permissions:           p.Permissions,
+		CanTrade:              p.CanTrade,
+		CanDeposit:            p.CanDeposit,
+		CanWithdraw:           p.CanWithdraw,
+		EstimatedTotalUsdt:    p.EstimatedTotalUSDT,
+		UnsupportedAssetCount: big.NewInt(int64(p.UnsupportedAssetCnt)),
+		Assets:                assets,
+		FetchedAt:             big.NewInt(p.FetchedAt),
+		Version:               p.Version,
+	}
+
+	return abi.Arguments{{Type: profileType}}.Pack(profile)
 }
 
 // padToMultipleOf32 pads data to a multiple of 32 bytes with trailing zeros.
