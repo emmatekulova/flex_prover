@@ -46,10 +46,13 @@ Fill in `.env`:
 ```bash
 PRIVATE_KEY="<your funded Coston2 private key, no 0x>"
 INITIAL_OWNER="0x<your wallet address>"
-BINANCE_API_KEY="<your Binance API key>"
-BINANCE_SECRET_KEY="<your Binance secret key>"
 LANGUAGE=go
 ```
+
+> **API keys are no longer stored in `.env`.** They are passed per-request to the
+> `attest` tool and ECIES-encrypted with the TEE's public key before being sent
+> on-chain. The TEE decrypts them inside the secure enclave — they never travel
+> in plaintext outside the TEE.
 
 Also copy the proxy config:
 ```bash
@@ -129,9 +132,49 @@ go run ./cmd/run-test --instructionSender $INSTRUCTION_SENDER -p http://localhos
 
 ---
 
-## Fetching Binance data (local test)
+## Triggering a CEX attestation on-chain
 
-Test any handler directly against the running extension without going through the chain:
+After completing the one-time setup (steps 0–7), use the `attest` tool to request a
+signed TEE attestation at any time:
+
+```bash
+cd go/tools
+
+# Public endpoint — no API key required:
+go run ./cmd/attest -mode ticker -symbol BTCUSDT
+
+# Authenticated — credentials are ECIES-encrypted before sending on-chain:
+go run ./cmd/attest -mode profile -apiKey YOUR_KEY -secretKey YOUR_SECRET
+go run ./cmd/attest -mode account -apiKey YOUR_KEY -secretKey YOUR_SECRET
+go run ./cmd/attest -mode pnl    -apiKey YOUR_KEY -secretKey YOUR_SECRET
+go run ./cmd/attest -mode stats  -symbol ETHUSDT
+```
+
+The tool prints the instruction ID, payload, and TEE signature:
+```
+INF Credentials encrypted (113 bytes ciphertext)
+INF Sending profile attestation for CEX=binance...
+INF Instruction submitted. ID: 0x<hash>
+INF Waiting for TEE result...
+INF === Attestation Result ===
+INF Instruction ID:    0x<hash>
+INF Signature (hex):   7147...
+INF Payload:           {"source":"binance-user-profile","uid":...}
+```
+
+**Available modes:**
+
+| Mode | Binance endpoint | Auth |
+|------|-----------------|------|
+| `ticker` | `/api/v3/ticker/price` | No |
+| `stats` | `/api/v3/ticker/24hr` | No |
+| `account` | `/api/v3/account` | Yes |
+| `pnl` | `/fapi/v2/account` | Yes + futures |
+| `profile` | `/api/v3/account` (full profile) | Yes |
+
+## Local handler test (no chain)
+
+Test any handler directly against the running extension without sending a chain transaction:
 
 ```bash
 cd go/tools
@@ -142,22 +185,24 @@ go run ./cmd/test-binance-attest -mode ticker -symbol BTCUSDT
 # 24h market stats
 go run ./cmd/test-binance-attest -mode stats -symbol BTCUSDT
 
-# Spot account balances + total USDT (requires BINANCE_API_KEY)
-go run ./cmd/test-binance-attest -mode account
+# Spot account balances (pass keys directly — NOT encrypted in this test tool)
+go run ./cmd/test-binance-attest -mode account -apiKey YOUR_KEY -secretKey YOUR_SECRET
 
-# Futures PnL (requires futures account)
-go run ./cmd/test-binance-attest -mode pnl
+# Futures PnL
+go run ./cmd/test-binance-attest -mode pnl -apiKey YOUR_KEY -secretKey YOUR_SECRET
 
-# Full user profile: UID, account type, permissions, balances (requires BINANCE_API_KEY)
-go run ./cmd/test-binance-attest -mode profile
+# Full user profile
+go run ./cmd/test-binance-attest -mode profile -apiKey YOUR_KEY -secretKey YOUR_SECRET
 ```
+
+> **Warning**: `test-binance-attest` sends credentials as plaintext hex for local testing only.
+> Use `cmd/attest` for production — it ECIES-encrypts credentials with the TEE's public key.
 
 Each mode prints the signed payload and signature. Example for `profile`:
 ```
-✅ Binance attestation + TEE sign succeeded
-mode=profile
-payload={"source":"binance-user-profile","uid":1228038409,"accountType":"SPOT",
-         "permissions":["TRD_GRP_041"],"canTrade":true,...}
+✅ CEX attestation + TEE sign succeeded
+cex=binance mode=profile
+payload={"source":"binance-user-profile","uid":1228038409,"accountType":"SPOT",...}
 signature_len=65
 ```
 
@@ -212,15 +257,29 @@ go run ./cmd/publish-attestation -store 0x<address>
 
 ## Supported op commands
 
-All handlers live under `OP_TYPE = MARKET`:
+All handlers live under `OP_TYPE = MARKET`. The message payload is a JSON `CEXRequest`:
 
-| `opCommand` | Data fetched | Binance endpoint | Auth |
-|---|---|---|---|
-| `BINANCE_FETCH_AND_ATTEST` | Current ticker price | `/api/v3/ticker/price` | No |
-| `BINANCE_24H_STATS` | 24h market stats | `/api/v3/ticker/24hr` | No |
-| `BINANCE_ACCOUNT_SUMMARY` | Spot balances + total USDT | `/api/v3/account` | Yes |
-| `BINANCE_ACCOUNT_PNL` | Futures wallet + unrealised PnL | `/fapi/v2/account` | Yes + futures |
-| `BINANCE_USER_PROFILE` | UID, account type, permissions, balances | `/api/v3/account` | Yes |
+```json
+{
+  "cex": "binance",
+  "encryptedCredentials": "0x<ecies-ciphertext-hex>",
+  "symbol": "BTCUSDT"
+}
+```
+
+Generic op commands (preferred for new integrations):
+
+| `opCommand` | Data fetched | Auth |
+|---|---|---|
+| `FETCH_AND_ATTEST` | Current ticker price | No |
+| `24H_STATS` | 24h market stats | No |
+| `ACCOUNT_SUMMARY` | Spot balances + total USDT | Yes |
+| `ACCOUNT_PNL` | Futures wallet + unrealised PnL | Yes + futures |
+| `USER_PROFILE` | UID, account type, permissions, balances | Yes |
+
+Binance-prefixed aliases (backward compatible with deployed contracts):
+`BINANCE_FETCH_AND_ATTEST`, `BINANCE_24H_STATS`, `BINANCE_ACCOUNT_SUMMARY`,
+`BINANCE_ACCOUNT_PNL`, `BINANCE_USER_PROFILE` — all route to the same handlers.
 
 All handlers return ABI-encoded `(bytes payload, bytes signature)` where `signature` is a 65-byte secp256k1 ECDSA signature over `keccak256(payload)`.
 
@@ -277,15 +336,16 @@ The `internal/base/` package is framework infrastructure — don't modify it.
 
 All commands run from `go/tools/`. They read `PRIVATE_KEY`, `CHAIN_URL`, and `ADDRESSES_FILE` from `.env` at the repo root.
 
-| Command | Purpose |
-|---|---|
-| `deploy-contract` | Deploy InstructionSender |
-| `register-extension` | Register extension on Flare TEE registry |
-| `allow-tee-version` | Whitelist TEE code hash + platform |
-| `register-tee` | Register TEE machine (pre-reg → attest → produce) |
-| `run-test` | End-to-end test (ECIES key update + sign + verify) |
-| `test-binance-attest` | Direct handler test (no chain required) |
-| `publish-attestation` | Fetch profile + deploy store + publish on-chain |
+| Command | Purpose | One-time? |
+|---|---|---|
+| `deploy-contract` | Deploy InstructionSender | Yes |
+| `register-extension` | Register extension on Flare TEE registry | Yes |
+| `allow-tee-version` | Whitelist TEE code hash + platform | Yes |
+| `register-tee` | Register TEE machine (pre-reg → attest → produce) | Yes |
+| `run-test` | End-to-end test (ECIES key update + sign + verify) | Yes |
+| `attest` | **Trigger a CEX attestation on-chain** (ECIES-encrypts API keys) | **Ongoing** |
+| `test-binance-attest` | Direct handler test, no chain, plaintext keys (local only) | Dev |
+| `publish-attestation` | Fetch profile + deploy store + publish on-chain | Ongoing |
 
 ---
 

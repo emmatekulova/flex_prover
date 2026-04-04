@@ -11,23 +11,22 @@ const (
 	OpCommandUpdate = "UPDATE"
 	OpCommandSign   = "SIGN"
 
-	OpTypeMarket                    = "MARKET"
-	OpCommandBinanceFetchAndAttest  = "BINANCE_FETCH_AND_ATTEST"
-	OpCommandBinance24hStats        = "BINANCE_24H_STATS"
-	OpCommandBinanceAccountPnl      = "BINANCE_ACCOUNT_PNL"
-	OpCommandBinanceAccountSummary  = "BINANCE_ACCOUNT_SUMMARY"
-	OpCommandBinanceUserProfile     = "BINANCE_USER_PROFILE"
+	OpTypeMarket = "MARKET"
+
+	// Generic op commands (CEX-agnostic, preferred for new integrations):
+	OpCommandFetchAndAttest = "FETCH_AND_ATTEST"
+	OpCommand24hStats       = "24H_STATS"
+	OpCommandAccountPnl     = "ACCOUNT_PNL"
+	OpCommandAccountSummary = "ACCOUNT_SUMMARY"
+	OpCommandUserProfile    = "USER_PROFILE"
+
+	// Binance-prefixed aliases kept for backward compatibility with deployed InstructionSender contracts:
+	OpCommandBinanceFetchAndAttest = "BINANCE_FETCH_AND_ATTEST"
+	OpCommandBinance24hStats       = "BINANCE_24H_STATS"
+	OpCommandBinanceAccountPnl     = "BINANCE_ACCOUNT_PNL"
+	OpCommandBinanceAccountSummary = "BINANCE_ACCOUNT_SUMMARY"
+	OpCommandBinanceUserProfile    = "BINANCE_USER_PROFILE"
 )
-
-// BinanceAPIKey returns the Binance API key from environment, if set.
-func BinanceAPIKey() string {
-	return os.Getenv("BINANCE_API_KEY")
-}
-
-// BinanceSecretKey returns the Binance secret key from environment, if set.
-func BinanceSecretKey() string {
-	return os.Getenv("BINANCE_SECRET_KEY")
-}
 
 // BinanceSpotAPIBaseURL returns spot API base URL, defaulting to production.
 func BinanceSpotAPIBaseURL() string {
@@ -44,4 +43,3 @@ func BinanceFuturesAPIBaseURL() string {
 	}
 	return "https://fapi.binance.com"
 }
-

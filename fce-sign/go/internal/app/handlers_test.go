@@ -7,7 +7,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -62,6 +61,14 @@ func makeActionBody(opType, opCommand, originalMessage string) string {
 
 func opTypeHex(s string) string {
 	return base.VersionToHex(s) // reuse the same stringToBytes32Hex
+}
+
+// encryptedCredsHex encodes CEXCredentials as JSON and hex-encodes it as a
+// fake "ciphertext". The test mock /decrypt handler returns it as plaintext.
+func encryptedCredsHex(apiKey, secretKey string) string {
+	creds := CEXCredentials{APIKey: apiKey, SecretKey: secretKey}
+	credsJSON, _ := json.Marshal(creds)
+	return base.BytesToHex(credsJSON)
 }
 
 func TestActionKeyUpdateAndSign(t *testing.T) {
@@ -329,7 +336,8 @@ func TestActionBinanceFetchAndAttest(t *testing.T) {
 
 	srv := base.New("0", signPort, Version, Register, ReportState)
 
-	reqPayload := []byte(`{"symbol":"BTCUSDT"}`)
+	// Ticker is public — no credentials needed.
+	reqPayload, _ := json.Marshal(CEXRequest{CEX: "binance", Symbol: "BTCUSDT"})
 	body := makeActionBody(opTypeHex("MARKET"), opTypeHex("BINANCE_FETCH_AND_ATTEST"), base.BytesToHex(reqPayload))
 	req := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader(body))
 	w := httptest.NewRecorder()
@@ -415,7 +423,7 @@ func TestActionBinanceFetchAndAttestSignFailure(t *testing.T) {
 
 	srv := base.New("0", signPort, Version, Register, ReportState)
 
-	reqPayload := []byte(`{"symbol":"BTCUSDT"}`)
+	reqPayload, _ := json.Marshal(CEXRequest{CEX: "binance", Symbol: "BTCUSDT"})
 	body := makeActionBody(opTypeHex("MARKET"), opTypeHex("BINANCE_FETCH_AND_ATTEST"), base.BytesToHex(reqPayload))
 	req := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader(body))
 	w := httptest.NewRecorder()
@@ -440,20 +448,18 @@ func TestActionBinanceAccountPnlAndAttest(t *testing.T) {
 		binanceFuturesAPIBaseURL = origFuturesBaseURL
 	}()
 
-	origAPIKey := os.Getenv("BINANCE_API_KEY")
-	origAPISecret := os.Getenv("BINANCE_SECRET_KEY")
-	defer func() {
-		_ = os.Setenv("BINANCE_API_KEY", origAPIKey)
-		_ = os.Setenv("BINANCE_SECRET_KEY", origAPISecret)
-	}()
-
-	_ = os.Setenv("BINANCE_API_KEY", "test-api-key")
-	_ = os.Setenv("BINANCE_SECRET_KEY", "test-secret")
-
 	expectedSig := []byte{0x11, 0x22, 0x33}
+	// Credentials are encrypted (in tests, we use the JSON directly as "ciphertext";
+	// the mock /decrypt returns it as-is).
+	credsHex := encryptedCredsHex("test-api-key", "test-secret")
 
 	mockNode := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/decrypt":
+			// Decode the "ciphertext" (which in tests is the plaintext JSON) and return it.
+			var req DecryptRequest
+			json.NewDecoder(r.Body).Decode(&req)
+			json.NewEncoder(w).Encode(DecryptResponse{DecryptedMessage: req.EncryptedMessage})
 		case "/fapi/v2/account":
 			if r.Header.Get("X-MBX-APIKEY") != "test-api-key" {
 				http.Error(w, "missing api key", http.StatusUnauthorized)
@@ -489,7 +495,8 @@ func TestActionBinanceAccountPnlAndAttest(t *testing.T) {
 	binanceFuturesAPIBaseURL = mockNode.URL
 
 	srv := base.New("0", signPort, Version, Register, ReportState)
-	body := makeActionBody(opTypeHex("MARKET"), opTypeHex("BINANCE_ACCOUNT_PNL"), base.BytesToHex([]byte("{}")))
+	reqPayload, _ := json.Marshal(CEXRequest{CEX: "binance", EncryptedCredentials: credsHex})
+	body := makeActionBody(opTypeHex("MARKET"), opTypeHex("BINANCE_ACCOUNT_PNL"), base.BytesToHex(reqPayload))
 	req := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -543,19 +550,12 @@ func TestActionBinanceAccountPnlAndAttest(t *testing.T) {
 
 func TestActionBinanceAccountPnlMissingCredentials(t *testing.T) {
 	privateKey = nil
-
-	origAPIKey := os.Getenv("BINANCE_API_KEY")
-	origAPISecret := os.Getenv("BINANCE_SECRET_KEY")
-	defer func() {
-		_ = os.Setenv("BINANCE_API_KEY", origAPIKey)
-		_ = os.Setenv("BINANCE_SECRET_KEY", origAPISecret)
-	}()
-
-	_ = os.Unsetenv("BINANCE_API_KEY")
-	_ = os.Unsetenv("BINANCE_SECRET_KEY")
+	signPort = "9999"
 
 	srv := base.New("0", "9999", Version, Register, ReportState)
-	body := makeActionBody(opTypeHex("MARKET"), opTypeHex("BINANCE_ACCOUNT_PNL"), base.BytesToHex([]byte("{}")))
+	// No encryptedCredentials → empty apiKey/secretKey → provider returns error.
+	reqPayload, _ := json.Marshal(CEXRequest{CEX: "binance"})
+	body := makeActionBody(opTypeHex("MARKET"), opTypeHex("BINANCE_ACCOUNT_PNL"), base.BytesToHex(reqPayload))
 	req := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -565,7 +565,7 @@ func TestActionBinanceAccountPnlMissingCredentials(t *testing.T) {
 	if result.Status != 0 {
 		t.Errorf("expected status 0, got %d", result.Status)
 	}
-	if result.Log == nil || !strings.Contains(*result.Log, "BINANCE_API_KEY and BINANCE_SECRET_KEY are required") {
+	if result.Log == nil || !strings.Contains(*result.Log, "apiKey and secretKey are required") {
 		t.Errorf("expected missing credentials error, got %v", result.Log)
 	}
 }
@@ -616,7 +616,8 @@ func TestActionBinance24hStatsAndAttest(t *testing.T) {
 	binanceAPIBaseURL = mockNode.URL
 
 	srv := base.New("0", signPort, Version, Register, ReportState)
-	reqPayload := []byte(`{"symbol":"BTCUSDT"}`)
+	// 24h stats is public — no credentials needed.
+	reqPayload, _ := json.Marshal(CEXRequest{CEX: "binance", Symbol: "BTCUSDT"})
 	body := makeActionBody(opTypeHex("MARKET"), opTypeHex("BINANCE_24H_STATS"), base.BytesToHex(reqPayload))
 	req := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader(body))
 	w := httptest.NewRecorder()
@@ -678,20 +679,15 @@ func TestActionBinanceAccountSummaryAndAttest(t *testing.T) {
 		binanceAPIBaseURL = origSpotBaseURL
 	}()
 
-	origAPIKey := os.Getenv("BINANCE_API_KEY")
-	origAPISecret := os.Getenv("BINANCE_SECRET_KEY")
-	defer func() {
-		_ = os.Setenv("BINANCE_API_KEY", origAPIKey)
-		_ = os.Setenv("BINANCE_SECRET_KEY", origAPISecret)
-	}()
-
-	_ = os.Setenv("BINANCE_API_KEY", "test-api-key")
-	_ = os.Setenv("BINANCE_SECRET_KEY", "test-secret")
-
 	expectedSig := []byte{0xaa, 0xbb, 0xcc}
+	credsHex := encryptedCredsHex("test-api-key", "test-secret")
 
 	mockNode := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/decrypt":
+			var req DecryptRequest
+			json.NewDecoder(r.Body).Decode(&req)
+			json.NewEncoder(w).Encode(DecryptResponse{DecryptedMessage: req.EncryptedMessage})
 		case "/api/v3/account":
 			if r.Header.Get("X-MBX-APIKEY") != "test-api-key" {
 				http.Error(w, "missing api key", http.StatusUnauthorized)
@@ -729,7 +725,8 @@ func TestActionBinanceAccountSummaryAndAttest(t *testing.T) {
 	binanceAPIBaseURL = mockNode.URL
 
 	srv := base.New("0", signPort, Version, Register, ReportState)
-	body := makeActionBody(opTypeHex("MARKET"), opTypeHex("BINANCE_ACCOUNT_SUMMARY"), base.BytesToHex([]byte("{}")))
+	reqPayload, _ := json.Marshal(CEXRequest{CEX: "binance", EncryptedCredentials: credsHex})
+	body := makeActionBody(opTypeHex("MARKET"), opTypeHex("BINANCE_ACCOUNT_SUMMARY"), base.BytesToHex(reqPayload))
 	req := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)

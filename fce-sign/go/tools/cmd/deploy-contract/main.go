@@ -34,6 +34,7 @@ func main() {
 	}
 
 	logger.Infof("InstructionSender deployed at: %s", address.Hex())
+	logger.Infof("  Explorer: https://coston2-explorer.flare.network/address/%s", address.Hex())
 
 	// Optionally write address to file for script consumption.
 	if *outFile != "" {
@@ -43,6 +44,7 @@ func main() {
 
 	// Verify contract on block explorer.
 	if *verify {
+		logger.Infof("Verifying source code on block explorer...")
 		verifyContract(address.Hex(), testSupport.Addresses, *explorerURL)
 	}
 
@@ -54,10 +56,12 @@ func verifyContract(address string, addresses *base.Addresses, explorerURL strin
 	// Check if forge and cast are available.
 	if _, err := exec.LookPath("forge"); err != nil {
 		logger.Warnf("forge not found, skipping contract verification (install Foundry to enable)")
+		logger.Infof("  You can verify manually at: https://coston2-explorer.flare.network/address/%s", address)
 		return
 	}
 	if _, err := exec.LookPath("cast"); err != nil {
 		logger.Warnf("cast not found, skipping contract verification (install Foundry to enable)")
+		logger.Infof("  You can verify manually at: https://coston2-explorer.flare.network/address/%s", address)
 		return
 	}
 
@@ -70,6 +74,7 @@ func verifyContract(address string, addresses *base.Addresses, explorerURL strin
 	constructorArgs, err := castArgs.Output()
 	if err != nil {
 		logger.Warnf("Failed to encode constructor args: %v", err)
+		logger.Infof("  You can verify manually at: https://coston2-explorer.flare.network/address/%s", address)
 		return
 	}
 
@@ -77,10 +82,10 @@ func verifyContract(address string, addresses *base.Addresses, explorerURL strin
 	contractDir := "../../contract"
 	if _, err := os.Stat(contractDir); err != nil {
 		logger.Warnf("Contract directory not found at %s, skipping verification", contractDir)
+		logger.Infof("  You can verify manually at: https://coston2-explorer.flare.network/address/%s", address)
 		return
 	}
 
-	logger.Infof("Verifying contract on block explorer...")
 	cmd := exec.Command("forge", "verify-contract",
 		"--verifier", "etherscan",
 		"--verifier-url", explorerURL,
@@ -95,8 +100,11 @@ func verifyContract(address string, addresses *base.Addresses, explorerURL strin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		logger.Warnf("Contract verification failed: %v (contract is deployed but not verified on explorer)", err)
+		logger.Warnf("Contract verification failed: %v", err)
+		logger.Infof("  Contract is deployed but not yet verified. Check status at:")
+		logger.Infof("  https://coston2-explorer.flare.network/address/%s", address)
 		return
 	}
-	logger.Infof("Contract verified on block explorer")
+	logger.Infof("✓ Contract source code verified on block explorer!")
+	logger.Infof("  View at: https://coston2-explorer.flare.network/address/%s", address)
 }

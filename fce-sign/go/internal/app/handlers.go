@@ -2,18 +2,12 @@ package app
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"math/big"
 	"net/http"
-	"net/url"
 	"sign-extension/internal/base"
-	"strings"
-	"time"
 
 	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
@@ -25,12 +19,10 @@ var (
 	signPort   string
 	httpClient = http.DefaultClient
 
-	binanceAPIBaseURL = BinanceSpotAPIBaseURL()
-	binanceFuturesAPIBaseURL = BinanceFuturesAPIBaseURL()
-	lastBinanceSymbol string
-	lastBinancePrice  string
-	lastBinanceAt     int64
-	lastBinanceUnrealizedProfit string
+	lastBinanceSymbol             string
+	lastBinancePrice              string
+	lastBinanceAt                 int64
+	lastBinanceUnrealizedProfit   string
 	lastBinanceEstimatedTotalUSDT string
 )
 
@@ -43,356 +35,174 @@ func SetSignPort(port string) {
 func Register(f *base.Framework) {
 	f.Handle(OpTypeKey, OpCommandUpdate, handleKeyUpdate)
 	f.Handle(OpTypeKey, OpCommandSign, handleKeySign)
-	f.Handle(OpTypeMarket, OpCommandBinanceFetchAndAttest, handleBinanceFetchAndAttest)
-	f.Handle(OpTypeMarket, OpCommandBinance24hStats, handleBinance24hStats)
-	f.Handle(OpTypeMarket, OpCommandBinanceAccountPnl, handleBinanceAccountPnl)
-	f.Handle(OpTypeMarket, OpCommandBinanceAccountSummary, handleBinanceAccountSummary)
-	f.Handle(OpTypeMarket, OpCommandBinanceUserProfile, handleBinanceUserProfile)
+
+	// Generic op commands (CEX-agnostic):
+	f.Handle(OpTypeMarket, OpCommandFetchAndAttest, handleCEXFetchAndAttest)
+	f.Handle(OpTypeMarket, OpCommand24hStats, handleCEX24hStats)
+	f.Handle(OpTypeMarket, OpCommandAccountPnl, handleCEXAccountPnl)
+	f.Handle(OpTypeMarket, OpCommandAccountSummary, handleCEXAccountSummary)
+	f.Handle(OpTypeMarket, OpCommandUserProfile, handleCEXUserProfile)
+
+	// Binance-prefixed aliases for backward compatibility with deployed InstructionSender contracts:
+	f.Handle(OpTypeMarket, OpCommandBinanceFetchAndAttest, handleCEXFetchAndAttest)
+	f.Handle(OpTypeMarket, OpCommandBinance24hStats, handleCEX24hStats)
+	f.Handle(OpTypeMarket, OpCommandBinanceAccountPnl, handleCEXAccountPnl)
+	f.Handle(OpTypeMarket, OpCommandBinanceAccountSummary, handleCEXAccountSummary)
+	f.Handle(OpTypeMarket, OpCommandBinanceUserProfile, handleCEXUserProfile)
 }
 
 // ReportState returns a JSON snapshot of the current state.
 func ReportState() json.RawMessage {
 	hasKey := privateKey != nil
 	data, _ := json.Marshal(map[string]interface{}{
-		"hasKey":            hasKey,
-		"version":           Version,
-		"lastBinanceSymbol": lastBinanceSymbol,
-		"lastBinancePrice":  lastBinancePrice,
-		"lastBinanceAt":     lastBinanceAt,
-		"lastBinanceUnrealizedProfit": lastBinanceUnrealizedProfit,
+		"hasKey":                       hasKey,
+		"version":                      Version,
+		"lastBinanceSymbol":            lastBinanceSymbol,
+		"lastBinancePrice":             lastBinancePrice,
+		"lastBinanceAt":                lastBinanceAt,
+		"lastBinanceUnrealizedProfit":  lastBinanceUnrealizedProfit,
 		"lastBinanceEstimatedTotalUsdt": lastBinanceEstimatedTotalUSDT,
 	})
 	return data
 }
 
-// handleBinanceUserProfile fetches the authenticated Binance spot account, enriches it
-// with UID, account type, and permissions, computes per-asset USD values, then returns
-// ABI-encoded (payload, signature) signed by the TEE node key.
-func handleBinanceUserProfile(_ string) (data *string, status int, err error) {
-	account, fetchErr := fetchBinanceSpotAccount()
-	if fetchErr != nil {
-		return nil, 0, fetchErr
+// resolveCredentials decrypts the credentials from the CEXRequest.
+// If encryptedCredentials is empty, returns empty strings (valid for public endpoints).
+// The decrypted JSON must be: {"apiKey":"...","secretKey":"..."}
+func resolveCredentials(req *CEXRequest) (apiKey, secretKey string, err error) {
+	if req.EncryptedCredentials == "" {
+		return "", "", nil
 	}
-
-	prices, pricesErr := fetchBinanceAllSpotPrices()
-	if pricesErr != nil {
-		return nil, 0, pricesErr
+	ciphertext, err := base.HexToBytes(req.EncryptedCredentials)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid encryptedCredentials hex: %v", err)
 	}
-
-	assets := make([]BinanceAccountAssetSummary, 0)
-	totalUSDT := new(big.Float)
-	unsupported := 0
-
-	for _, balance := range account.Balances {
-		free, ok := new(big.Float).SetString(balance.Free)
-		if !ok {
-			continue
-		}
-		locked, ok := new(big.Float).SetString(balance.Locked)
-		if !ok {
-			continue
-		}
-
-		qty := new(big.Float).Add(free, locked)
-		if qty.Sign() == 0 {
-			continue
-		}
-
-		estimated := new(big.Float)
-		asset := strings.ToUpper(strings.TrimSpace(balance.Asset))
-		switch asset {
-		case "USDT", "USDC", "BUSD", "FDUSD", "TUSD":
-			estimated.Copy(qty)
-		default:
-			price, found := prices[asset+"USDT"]
-			if !found {
-				unsupported++
-				continue
-			}
-			estimated.Mul(qty, price)
-		}
-
-		totalUSDT.Add(totalUSDT, estimated)
-		assets = append(assets, BinanceAccountAssetSummary{
-			Asset:         asset,
-			Total:         decimalToString(qty),
-			EstimatedUSDT: decimalToString(estimated),
-		})
+	plaintext, err := decryptViaNode(ciphertext)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to decrypt credentials: %v", err)
 	}
-
-	payload := BinanceUserProfileAttestationPayload{
-		Source:              "binance-user-profile",
-		UID:                 account.UID,
-		AccountType:         account.AccountType,
-		Permissions:         account.Permissions,
-		CanTrade:            account.CanTrade,
-		CanDeposit:          account.CanDeposit,
-		CanWithdraw:         account.CanWithdraw,
-		EstimatedTotalUSDT:  decimalToString(totalUSDT),
-		UnsupportedAssetCnt: unsupported,
-		Assets:              assets,
-		FetchedAt:           time.Now().Unix(),
-		Version:             Version,
+	var creds CEXCredentials
+	if err := json.Unmarshal(plaintext, &creds); err != nil {
+		return "", "", fmt.Errorf("decrypted credentials are not valid JSON: %v", err)
 	}
-
-	payloadBytes, encodeErr := abiEncodeUserProfile(payload)
-	if encodeErr != nil {
-		return nil, 0, fmt.Errorf("failed to ABI-encode user profile payload: %v", encodeErr)
-	}
-
-	signature, signErr := signViaNode(payloadBytes)
-	if signErr != nil {
-		return nil, 0, fmt.Errorf("signing failed: %v", signErr)
-	}
-
-	encoded, abiErr := abiEncodeTwo(payloadBytes, signature)
-	if abiErr != nil {
-		return nil, 0, fmt.Errorf("ABI encoding failed: %v", abiErr)
-	}
-
-	lastBinanceEstimatedTotalUSDT = payload.EstimatedTotalUSDT
-	lastBinanceAt = payload.FetchedAt
-
-	dataHex := base.BytesToHex(encoded)
-	return &dataHex, 1, nil
+	return creds.APIKey, creds.SecretKey, nil
 }
 
-func handleBinanceAccountSummary(_ string) (data *string, status int, err error) {
-	account, fetchErr := fetchBinanceSpotAccount()
-	if fetchErr != nil {
-		return nil, 0, fetchErr
+// signAndEncode signs payloadBytes via the TEE node and returns ABI-encoded (payload, signature).
+func signAndEncode(payloadBytes []byte) (*string, int, error) {
+	signature, err := signViaNode(payloadBytes)
+	if err != nil {
+		return nil, 0, fmt.Errorf("signing failed: %v", err)
 	}
-
-	prices, pricesErr := fetchBinanceAllSpotPrices()
-	if pricesErr != nil {
-		return nil, 0, pricesErr
+	encoded, err := abiEncodeTwo(payloadBytes, signature)
+	if err != nil {
+		return nil, 0, fmt.Errorf("ABI encoding failed: %v", err)
 	}
-
-	assets := make([]BinanceAccountAssetSummary, 0)
-	totalUSDT := new(big.Float)
-	unsupported := 0
-
-	for _, balance := range account.Balances {
-		free, ok := new(big.Float).SetString(balance.Free)
-		if !ok {
-			continue
-		}
-		locked, ok := new(big.Float).SetString(balance.Locked)
-		if !ok {
-			continue
-		}
-
-		qty := new(big.Float).Add(free, locked)
-		if qty.Sign() == 0 {
-			continue
-		}
-
-		estimated := new(big.Float)
-		asset := strings.ToUpper(strings.TrimSpace(balance.Asset))
-		switch asset {
-		case "USDT", "USDC", "BUSD", "FDUSD", "TUSD":
-			estimated.Copy(qty)
-		default:
-			price, found := prices[asset+"USDT"]
-			if !found {
-				unsupported++
-				continue
-			}
-			estimated.Mul(qty, price)
-		}
-
-		totalUSDT.Add(totalUSDT, estimated)
-		assets = append(assets, BinanceAccountAssetSummary{
-			Asset:         asset,
-			Total:         decimalToString(qty),
-			EstimatedUSDT: decimalToString(estimated),
-		})
-	}
-
-	payload := BinanceAccountSummaryAttestationPayload{
-		Source:              "binance-account",
-		CanTrade:            account.CanTrade,
-		CanDeposit:          account.CanDeposit,
-		CanWithdraw:         account.CanWithdraw,
-		EstimatedTotalUSDT:  decimalToString(totalUSDT),
-		UnsupportedAssetCnt: unsupported,
-		Assets:              assets,
-		FetchedAt:           time.Now().Unix(),
-		Version:             Version,
-	}
-
-	payloadBytes, marshalErr := json.Marshal(payload)
-	if marshalErr != nil {
-		return nil, 0, fmt.Errorf("failed to marshal account summary payload: %v", marshalErr)
-	}
-
-	signature, signErr := signViaNode(payloadBytes)
-	if signErr != nil {
-		return nil, 0, fmt.Errorf("signing failed: %v", signErr)
-	}
-
-	encoded, abiErr := abiEncodeTwo(payloadBytes, signature)
-	if abiErr != nil {
-		return nil, 0, fmt.Errorf("ABI encoding failed: %v", abiErr)
-	}
-
-	lastBinanceEstimatedTotalUSDT = payload.EstimatedTotalUSDT
-	lastBinanceAt = payload.FetchedAt
-
-	dataHex := base.BytesToHex(encoded)
-	return &dataHex, 1, nil
+	hex := base.BytesToHex(encoded)
+	return &hex, 1, nil
 }
 
-// handleBinanceAccountPnl fetches authenticated Binance futures account metrics,
-// builds an account-PnL payload, signs it via the TEE node key, and returns
-// ABI-encoded (payload, signature).
-func handleBinanceAccountPnl(_ string) (data *string, status int, err error) {
-	account, fetchErr := fetchBinanceFuturesAccount()
-	if fetchErr != nil {
-		return nil, 0, fetchErr
+func handleCEXFetchAndAttest(msg string) (data *string, status int, err error) {
+	req, err := parseCEXRequest(msg)
+	if err != nil {
+		return nil, 0, err
 	}
-
-	payload := BinanceAccountPnlAttestationPayload{
-		Source:                "binance-futures",
-		AccountAlias:          account.AccountAlias,
-		CanTrade:              account.CanTrade,
-		TotalWalletBalance:    account.TotalWalletBalance,
-		TotalUnrealizedProfit: account.TotalUnrealizedProfit,
-		TotalMarginBalance:    account.TotalMarginBalance,
-		FetchedAt:             time.Now().Unix(),
-		Version:               Version,
+	apiKey, _, err := resolveCredentials(req)
+	if err != nil {
+		return nil, 0, err
 	}
-
-	payloadBytes, marshalErr := json.Marshal(payload)
-	if marshalErr != nil {
-		return nil, 0, fmt.Errorf("failed to marshal account pnl payload: %v", marshalErr)
+	provider, err := lookupCEX(req.CEX)
+	if err != nil {
+		return nil, 0, err
 	}
-
-	signature, signErr := signViaNode(payloadBytes)
-	if signErr != nil {
-		return nil, 0, fmt.Errorf("signing failed: %v", signErr)
+	payloadBytes, err := provider.FetchAndAttest(apiKey, "", req.Symbol)
+	if err != nil {
+		return nil, 0, err
 	}
-
-	encoded, abiErr := abiEncodeTwo(payloadBytes, signature)
-	if abiErr != nil {
-		return nil, 0, fmt.Errorf("ABI encoding failed: %v", abiErr)
-	}
-
-	lastBinanceUnrealizedProfit = payload.TotalUnrealizedProfit
-	lastBinanceAt = payload.FetchedAt
-
-	dataHex := base.BytesToHex(encoded)
-	return &dataHex, 1, nil
+	return signAndEncode(payloadBytes)
 }
 
-func handleBinance24hStats(msg string) (data *string, status int, err error) {
-	if msg == "" {
-		return nil, 0, fmt.Errorf("originalMessage is empty")
+func handleCEX24hStats(msg string) (data *string, status int, err error) {
+	req, err := parseCEXRequest(msg)
+	if err != nil {
+		return nil, 0, err
 	}
-
-	msgBytes, hexErr := base.HexToBytes(msg)
-	if hexErr != nil {
-		return nil, 0, fmt.Errorf("invalid hex in originalMessage: %v", hexErr)
+	provider, err := lookupCEX(req.CEX)
+	if err != nil {
+		return nil, 0, err
 	}
-
-	request, parseErr := parseBinanceFetchRequest(msgBytes)
-	if parseErr != nil {
-		return nil, 0, parseErr
+	payloadBytes, err := provider.Fetch24hStats("", "", req.Symbol)
+	if err != nil {
+		return nil, 0, err
 	}
-
-	stats, fetchErr := fetchBinance24hTicker(request.Symbol)
-	if fetchErr != nil {
-		return nil, 0, fetchErr
-	}
-
-	payload := Binance24hStatsAttestationPayload{
-		Source:             "binance-24h",
-		Symbol:             stats.Symbol,
-		LastPrice:          stats.LastPrice,
-		PriceChangePercent: stats.PriceChangePercent,
-		Volume:             stats.Volume,
-		QuoteVolume:        stats.QuoteVolume,
-		OpenTime:           stats.OpenTime,
-		CloseTime:          stats.CloseTime,
-		FetchedAt:          time.Now().Unix(),
-		Version:            Version,
-	}
-
-	payloadBytes, marshalErr := json.Marshal(payload)
-	if marshalErr != nil {
-		return nil, 0, fmt.Errorf("failed to marshal 24h stats payload: %v", marshalErr)
-	}
-
-	signature, signErr := signViaNode(payloadBytes)
-	if signErr != nil {
-		return nil, 0, fmt.Errorf("signing failed: %v", signErr)
-	}
-
-	encoded, abiErr := abiEncodeTwo(payloadBytes, signature)
-	if abiErr != nil {
-		return nil, 0, fmt.Errorf("ABI encoding failed: %v", abiErr)
-	}
-
-	lastBinanceSymbol = payload.Symbol
-	lastBinancePrice = payload.LastPrice
-	lastBinanceAt = payload.FetchedAt
-
-	dataHex := base.BytesToHex(encoded)
-	return &dataHex, 1, nil
+	return signAndEncode(payloadBytes)
 }
 
-// handleBinanceFetchAndAttest fetches ticker price data from Binance, builds an
-// attestation payload, signs it via the TEE node's private key, and returns
-// ABI-encoded (payload, signature).
-func handleBinanceFetchAndAttest(msg string) (data *string, status int, err error) {
-	if msg == "" {
-		return nil, 0, fmt.Errorf("originalMessage is empty")
+func handleCEXAccountPnl(msg string) (data *string, status int, err error) {
+	req, err := parseCEXRequest(msg)
+	if err != nil {
+		return nil, 0, err
+	}
+	apiKey, secretKey, err := resolveCredentials(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	provider, err := lookupCEX(req.CEX)
+	if err != nil {
+		return nil, 0, err
+	}
+	payloadBytes, err := provider.FetchAccountPnl(apiKey, secretKey)
+	if err != nil {
+		return nil, 0, err
+	}
+	return signAndEncode(payloadBytes)
+}
+
+func handleCEXAccountSummary(msg string) (data *string, status int, err error) {
+	req, err := parseCEXRequest(msg)
+	if err != nil {
+		return nil, 0, err
+	}
+	apiKey, secretKey, err := resolveCredentials(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	provider, err := lookupCEX(req.CEX)
+	if err != nil {
+		return nil, 0, err
+	}
+	payloadBytes, err := provider.FetchAccountSummary(apiKey, secretKey)
+	if err != nil {
+		return nil, 0, err
+	}
+	return signAndEncode(payloadBytes)
+}
+
+func handleCEXUserProfile(msg string) (data *string, status int, err error) {
+	req, err := parseCEXRequest(msg)
+	if err != nil {
+		return nil, 0, err
+	}
+	apiKey, secretKey, err := resolveCredentials(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	provider, err := lookupCEX(req.CEX)
+	if err != nil {
+		return nil, 0, err
 	}
 
-	msgBytes, hexErr := base.HexToBytes(msg)
-	if hexErr != nil {
-		return nil, 0, fmt.Errorf("invalid hex in originalMessage: %v", hexErr)
+	var payloadBytes []byte
+	// Use structured ABI encoding if the provider supports it (required by BinanceAttestationStore).
+	if enc, ok := provider.(ABIEncoderProvider); ok {
+		payloadBytes, err = enc.EncodeUserProfile(apiKey, secretKey)
+	} else {
+		payloadBytes, err = provider.FetchUserProfile(apiKey, secretKey)
 	}
-
-	request, parseErr := parseBinanceFetchRequest(msgBytes)
-	if parseErr != nil {
-		return nil, 0, parseErr
+	if err != nil {
+		return nil, 0, err
 	}
-
-	ticker, fetchErr := fetchBinanceTicker(request.Symbol)
-	if fetchErr != nil {
-		return nil, 0, fetchErr
-	}
-
-	payload := BinanceAttestationPayload{
-		Source:    "binance",
-		Symbol:    ticker.Symbol,
-		Price:     ticker.Price,
-		FetchedAt: time.Now().Unix(),
-		Version:   Version,
-	}
-
-	payloadBytes, marshalErr := json.Marshal(payload)
-	if marshalErr != nil {
-		return nil, 0, fmt.Errorf("failed to marshal attestation payload: %v", marshalErr)
-	}
-
-	signature, signErr := signViaNode(payloadBytes)
-	if signErr != nil {
-		return nil, 0, fmt.Errorf("signing failed: %v", signErr)
-	}
-
-	encoded, abiErr := abiEncodeTwo(payloadBytes, signature)
-	if abiErr != nil {
-		return nil, 0, fmt.Errorf("ABI encoding failed: %v", abiErr)
-	}
-
-	lastBinanceSymbol = payload.Symbol
-	lastBinancePrice = payload.Price
-	lastBinanceAt = payload.FetchedAt
-
-	dataHex := base.BytesToHex(encoded)
-	return &dataHex, 1, nil
+	return signAndEncode(payloadBytes)
 }
 
 // handleKeyUpdate decrypts the original message using the TEE node's key, then
@@ -402,14 +212,11 @@ func handleKeyUpdate(msg string) (data *string, status int, err error) {
 		return nil, 0, fmt.Errorf("originalMessage is empty")
 	}
 
-	// originalMessage is a hex string (hexutil.Bytes JSON serialization).
-	// Hex-decode to get the raw ECIES ciphertext bytes.
 	ciphertext, hexErr := base.HexToBytes(msg)
 	if hexErr != nil {
 		return nil, 0, fmt.Errorf("invalid hex in originalMessage: %v", hexErr)
 	}
 
-	// Decrypt via TEE node — sends ciphertext bytes (JSON-serialized as base64).
 	keyBytes, decryptErr := decryptViaNode(ciphertext)
 	if decryptErr != nil {
 		return nil, 0, fmt.Errorf("decryption failed: %v", decryptErr)
@@ -456,9 +263,6 @@ func handleKeySign(msg string) (data *string, status int, err error) {
 }
 
 // decryptViaNode calls the TEE node's /decrypt endpoint.
-// ciphertext is the raw ECIES ciphertext bytes; it is JSON-serialized as base64
-// in the request, matching the tee-node's DecryptRequest.EncryptedMessage []byte field.
-// Returns the decrypted plaintext bytes (also base64-serialized by tee-node).
 func decryptViaNode(ciphertext []byte) ([]byte, error) {
 	url := fmt.Sprintf("http://localhost:%s/decrypt", signPort)
 	reqBody, _ := json.Marshal(DecryptRequest{EncryptedMessage: ciphertext})
@@ -482,7 +286,6 @@ func decryptViaNode(ciphertext []byte) ([]byte, error) {
 }
 
 // signViaNode calls the TEE node's /sign endpoint.
-// message is raw bytes and is JSON-serialized as base64 in the request body.
 func signViaNode(message []byte) ([]byte, error) {
 	url := fmt.Sprintf("http://localhost:%s/sign", signPort)
 	reqBody, _ := json.Marshal(SignRequest{Message: message})
@@ -508,214 +311,4 @@ func signViaNode(message []byte) ([]byte, error) {
 	}
 
 	return sr.Signature, nil
-}
-
-func parseBinanceFetchRequest(raw []byte) (*BinanceFetchRequest, error) {
-	var req BinanceFetchRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
-		return nil, fmt.Errorf("invalid request payload: expected JSON {\"symbol\":\"...\"}")
-	}
-
-	req.Symbol = strings.TrimSpace(strings.ToUpper(req.Symbol))
-	if req.Symbol == "" {
-		return nil, fmt.Errorf("symbol is required")
-	}
-
-	return &req, nil
-}
-
-func fetchBinanceTicker(symbol string) (*BinanceTickerPriceResponse, error) {
-	endpoint := fmt.Sprintf("%s/api/v3/ticker/price?symbol=%s", strings.TrimRight(binanceAPIBaseURL, "/"), url.QueryEscape(symbol))
-
-	req, err := http.NewRequest("GET", endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	// Optionally add auth headers if credentials are provided.
-	// Note: Full signed requests require HMAC-SHA256; for now we just add the key header.
-	apiKey := BinanceAPIKey()
-	if apiKey != "" {
-		req.Header.Set("X-MBX-APIKEY", apiKey)
-	}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch Binance data: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("binance returned %d: %s", resp.StatusCode, string(b))
-	}
-
-	var ticker BinanceTickerPriceResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ticker); err != nil {
-		return nil, fmt.Errorf("failed to decode Binance response: %w", err)
-	}
-
-	if ticker.Symbol == "" || ticker.Price == "" {
-		return nil, fmt.Errorf("binance response missing symbol/price")
-	}
-
-	return &ticker, nil
-}
-
-func fetchBinanceFuturesAccount() (*BinanceFuturesAccountResponse, error) {
-	apiKey := strings.TrimSpace(BinanceAPIKey())
-	apiSecret := strings.TrimSpace(BinanceSecretKey())
-	if apiKey == "" || apiSecret == "" {
-		return nil, fmt.Errorf("BINANCE_API_KEY and BINANCE_SECRET_KEY are required for account PnL")
-	}
-
-	timestamp := time.Now().UnixMilli()
-	query := fmt.Sprintf("timestamp=%d&recvWindow=5000", timestamp)
-	signature := signBinanceQuery(apiSecret, query)
-
-	endpoint := fmt.Sprintf("%s/fapi/v2/account?%s&signature=%s", strings.TrimRight(binanceFuturesAPIBaseURL, "/"), query, signature)
-
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("X-MBX-APIKEY", apiKey)
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch Binance account data: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("binance futures returned %d: %s", resp.StatusCode, string(b))
-	}
-
-	var account BinanceFuturesAccountResponse
-	if err := json.NewDecoder(resp.Body).Decode(&account); err != nil {
-		return nil, fmt.Errorf("failed to decode Binance futures account response: %w", err)
-	}
-
-	if account.TotalWalletBalance == "" || account.TotalUnrealizedProfit == "" {
-		return nil, fmt.Errorf("binance futures account response missing pnl fields")
-	}
-
-	return &account, nil
-}
-
-func fetchBinance24hTicker(symbol string) (*Binance24hrTickerResponse, error) {
-	endpoint := fmt.Sprintf("%s/api/v3/ticker/24hr?symbol=%s", strings.TrimRight(binanceAPIBaseURL, "/"), url.QueryEscape(symbol))
-
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch Binance 24h data: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("binance 24h returned %d: %s", resp.StatusCode, string(b))
-	}
-
-	var stats Binance24hrTickerResponse
-	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
-		return nil, fmt.Errorf("failed to decode Binance 24h response: %w", err)
-	}
-
-	if stats.Symbol == "" || stats.LastPrice == "" {
-		return nil, fmt.Errorf("binance 24h response missing symbol/lastPrice")
-	}
-
-	return &stats, nil
-}
-
-func signBinanceQuery(secret, query string) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(query))
-	return fmt.Sprintf("%x", mac.Sum(nil))
-}
-
-func fetchBinanceSpotAccount() (*BinanceSpotAccountResponse, error) {
-	apiKey := strings.TrimSpace(BinanceAPIKey())
-	apiSecret := strings.TrimSpace(BinanceSecretKey())
-	if apiKey == "" || apiSecret == "" {
-		return nil, fmt.Errorf("BINANCE_API_KEY and BINANCE_SECRET_KEY are required for account summary")
-	}
-
-	timestamp := time.Now().UnixMilli()
-	query := fmt.Sprintf("timestamp=%d&recvWindow=5000", timestamp)
-	signature := signBinanceQuery(apiSecret, query)
-
-	endpoint := fmt.Sprintf("%s/api/v3/account?%s&signature=%s", strings.TrimRight(binanceAPIBaseURL, "/"), query, signature)
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("X-MBX-APIKEY", apiKey)
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch Binance account data: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("binance account returned %d: %s", resp.StatusCode, string(b))
-	}
-
-	var account BinanceSpotAccountResponse
-	if err := json.NewDecoder(resp.Body).Decode(&account); err != nil {
-		return nil, fmt.Errorf("failed to decode Binance account response: %w", err)
-	}
-
-	return &account, nil
-}
-
-func fetchBinanceAllSpotPrices() (map[string]*big.Float, error) {
-	endpoint := fmt.Sprintf("%s/api/v3/ticker/price", strings.TrimRight(binanceAPIBaseURL, "/"))
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch Binance spot prices: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("binance ticker price returned %d: %s", resp.StatusCode, string(b))
-	}
-
-	var entries []BinanceTickerPriceEntry
-	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
-		return nil, fmt.Errorf("failed to decode Binance ticker price response: %w", err)
-	}
-
-	result := make(map[string]*big.Float, len(entries))
-	for _, entry := range entries {
-		p, ok := new(big.Float).SetString(entry.Price)
-		if !ok {
-			continue
-		}
-		result[entry.Symbol] = p
-	}
-
-	return result, nil
-}
-
-func decimalToString(v *big.Float) string {
-	if v == nil {
-		return "0"
-	}
-	return strings.TrimRight(strings.TrimRight(v.Text('f', 8), "0"), ".")
 }

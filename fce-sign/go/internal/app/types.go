@@ -27,8 +27,23 @@ type SignResponse struct {
 	Signature []byte `json:"signature"`
 }
 
-// BinanceFetchRequest is the originalMessage payload for Binance attestation.
-// The message bytes should be a JSON object: {"symbol":"BTCUSDT"}.
+// CEXRequest is the unified message payload for all MARKET handlers.
+// Credentials must be encrypted with the TEE node's public key (ECIES) and
+// hex-encoded. The TEE decrypts them internally; they are never stored or logged.
+// Public endpoints (ticker, 24h stats) do not require encryptedCredentials.
+type CEXRequest struct {
+	CEX                  string `json:"cex"`                            // e.g. "binance", "bybit"
+	EncryptedCredentials string `json:"encryptedCredentials,omitempty"` // hex-encoded ECIES ciphertext of CEXCredentials JSON
+	Symbol               string `json:"symbol,omitempty"`               // for ticker/stats requests
+}
+
+// CEXCredentials holds plaintext credentials, used only inside the TEE after decryption.
+type CEXCredentials struct {
+	APIKey    string `json:"apiKey"`
+	SecretKey string `json:"secretKey"`
+}
+
+// BinanceFetchRequest is kept for reference; use CEXRequest for all handlers.
 type BinanceFetchRequest struct {
 	Symbol string `json:"symbol"`
 }

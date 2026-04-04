@@ -44,39 +44,65 @@ type actionResult struct {
 	Data          *string `json:"data"`
 }
 
+// cexRequest mirrors the Go type for JSON marshaling.
+type cexRequest struct {
+	CEX                  string `json:"cex"`
+	EncryptedCredentials string `json:"encryptedCredentials,omitempty"`
+	Symbol               string `json:"symbol,omitempty"`
+}
+
+// cexCredentials is JSON-encoded and then hex-encoded as the "ciphertext".
+// In production, the frontend encrypts this with the TEE node's ECIES public key.
+type cexCredentials struct {
+	APIKey    string `json:"apiKey"`
+	SecretKey string `json:"secretKey"`
+}
+
 func main() {
-	endpoint := flag.String("url", "http://127.0.0.1:8883/action", "extension /action endpoint")
-	mode := flag.String("mode", "ticker", "test mode: ticker, stats, account, pnl, or profile")
-	symbol := flag.String("symbol", "BTCUSDT", "binance symbol")
+	endpoint  := flag.String("url", "http://127.0.0.1:8883/action", "extension /action endpoint")
+	mode      := flag.String("mode", "ticker", "test mode: ticker, stats, account, pnl, or profile")
+	cex       := flag.String("cex", "binance", "CEX provider name (e.g. binance)")
+	symbol    := flag.String("symbol", "BTCUSDT", "trading pair symbol (for ticker/stats)")
+	apiKey    := flag.String("apiKey", "", "CEX API key (required for account/pnl/profile)")
+	secretKey := flag.String("secretKey", "", "CEX secret key (required for account/pnl/profile)")
 	flag.Parse()
 
-	opCommand := "BINANCE_FETCH_AND_ATTEST"
-	reqBytes := []byte("{}")
+	// Build credentials hex. In this tool, credentials are JSON-encoded and
+	// hex-encoded without real ECIES encryption (for local testing only).
+	// In production, the frontend must ECIES-encrypt the credentials JSON
+	// with the TEE node's public key before hex-encoding.
+	var encryptedCredsHex string
+	if *apiKey != "" || *secretKey != "" {
+		credsJSON, _ := json.Marshal(cexCredentials{APIKey: *apiKey, SecretKey: *secretKey})
+		encryptedCredsHex = "0x" + hex.EncodeToString(credsJSON)
+		fmt.Printf("⚠️  WARNING: credentials are NOT encrypted in this test tool.\n")
+		fmt.Printf("   In production, ECIES-encrypt the credentials JSON with the TEE public key.\n\n")
+	}
+
+	opCommand := "FETCH_AND_ATTEST"
+	req := cexRequest{CEX: *cex}
 
 	switch strings.ToLower(strings.TrimSpace(*mode)) {
 	case "ticker":
-		req := map[string]string{"symbol": strings.ToUpper(strings.TrimSpace(*symbol))}
-		reqBytes, _ = json.Marshal(req)
-		opCommand = "BINANCE_FETCH_AND_ATTEST"
+		req.Symbol = strings.ToUpper(strings.TrimSpace(*symbol))
+		opCommand = "FETCH_AND_ATTEST"
 	case "stats":
-		req := map[string]string{"symbol": strings.ToUpper(strings.TrimSpace(*symbol))}
-		reqBytes, _ = json.Marshal(req)
-		opCommand = "BINANCE_24H_STATS"
+		req.Symbol = strings.ToUpper(strings.TrimSpace(*symbol))
+		opCommand = "24H_STATS"
 	case "pnl":
-		// Account PnL handler ignores originalMessage for now.
-		reqBytes = []byte("{}")
-		opCommand = "BINANCE_ACCOUNT_PNL"
+		req.EncryptedCredentials = encryptedCredsHex
+		opCommand = "ACCOUNT_PNL"
 	case "account":
-		// Account summary handler ignores originalMessage for now.
-		reqBytes = []byte("{}")
-		opCommand = "BINANCE_ACCOUNT_SUMMARY"
+		req.EncryptedCredentials = encryptedCredsHex
+		opCommand = "ACCOUNT_SUMMARY"
 	case "profile":
-		// User profile includes UID, account type, permissions + balances.
-		reqBytes = []byte("{}")
-		opCommand = "BINANCE_USER_PROFILE"
+		req.EncryptedCredentials = encryptedCredsHex
+		opCommand = "USER_PROFILE"
 	default:
 		panic("invalid -mode, use ticker, stats, account, pnl, or profile")
 	}
+
+	reqBytes, _ := json.Marshal(req)
 
 	df := dataFixed{
 		InstructionID:   "0x0000000000000000000000000000000000000000000000000000000000000001",
@@ -91,7 +117,7 @@ func main() {
 	body := action{Data: actionData{
 		ID:            "0x0000000000000000000000000000000000000000000000000000000000000001",
 		Type:          "instruction",
-		SubmissionTag: "manual-binance-attest-check",
+		SubmissionTag: "manual-cex-attest-check",
 		Message:       bytesToHex(dfBytes),
 	}}
 
@@ -138,8 +164,8 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Println("✅ Binance attestation + TEE sign succeeded")
-	fmt.Printf("mode=%s\n", strings.ToLower(strings.TrimSpace(*mode)))
+	fmt.Println("✅ CEX attestation + TEE sign succeeded")
+	fmt.Printf("cex=%s mode=%s\n", *cex, strings.ToLower(strings.TrimSpace(*mode)))
 	fmt.Printf("opType=%s opCommand=%s status=%d\n", bytes32HexToString(result.OpType), bytes32HexToString(result.OpCommand), result.Status)
 	fmt.Printf("signature_len=%d\n", len(signatureBytes))
 	fmt.Printf("payload=%s\n", string(payloadBytes))

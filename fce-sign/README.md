@@ -188,6 +188,42 @@ The test will:
 
 ---
 
+## Triggering a CEX Attestation (after setup)
+
+Once the stack is deployed and running (steps 0–7 are one-time setup), use the
+`attest` tool to request a TEE attestation on-chain at any time:
+
+```bash
+cd go/tools
+
+# Public endpoint — no API key needed:
+go run ./cmd/attest -mode ticker -symbol BTCUSDT
+
+# Authenticated endpoint — API keys are ECIES-encrypted before sending:
+go run ./cmd/attest -mode profile -apiKey YOUR_KEY -secretKey YOUR_SECRET
+```
+
+The tool:
+1. Fetches the TEE node's ECIES public key
+2. Encrypts your credentials with that key (they never travel in plaintext)
+3. Sends the instruction on-chain via `InstructionSender`
+4. Polls until the TEE returns the signed result
+5. Prints the instruction ID, payload, and TEE signature
+
+**Available modes:**
+
+| Mode | Data fetched | Auth required |
+|------|-------------|---------------|
+| `ticker` | Current price for `--symbol` | No |
+| `stats` | 24h market stats for `--symbol` | No |
+| `account` | Spot balances + total USDT value | Yes |
+| `pnl` | Futures wallet + unrealised PnL | Yes |
+| `profile` | UID, account type, permissions, balances | Yes |
+
+See [`go/README.md`](go/README.md#tools-gotools) for full tool details.
+
+---
+
 ## Port reference
 
 | Service            | Container port | Host port |

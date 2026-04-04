@@ -168,6 +168,67 @@ func SendSign(s *base.Support, instructionSenderAddress common.Address, message 
 	return parseInstructionID(receipt, s)
 }
 
+// SendAttestWithTxHash sends a generic market attestation instruction via InstructionSender.
+// message is the JSON-encoded CEXRequest (with encrypted credentials if needed).
+// contractFunc selects which InstructionSender method to call.
+// Returns (txHash, instructionID, error).
+func SendAttestWithTxHash(s *base.Support, instructionSenderAddress common.Address, message []byte, fee *big.Int,
+	contractFunc func(*contract.InstructionSender, *bind.TransactOpts, []byte) (*types.Transaction, error),
+) (common.Hash, common.Hash, error) {
+	sender, err := contract.NewInstructionSender(instructionSenderAddress, s.ChainClient)
+	if err != nil {
+		return common.Hash{}, common.Hash{}, errors.Errorf("failed to bind contract: %s", err)
+	}
+
+	opts, err := bind.NewKeyedTransactorWithChainID(s.Prv, s.ChainID)
+	if err != nil {
+		return common.Hash{}, common.Hash{}, errors.Errorf("failed to create transactor: %s", err)
+	}
+	opts.Value = fee
+
+	tx, err := contractFunc(sender, opts, message)
+	if err != nil {
+		reason := fccutils.DecodeRevertReason(err)
+		if reason != "" {
+			return common.Hash{}, common.Hash{}, errors.Errorf("attest reverted: %s", reason)
+		}
+		return common.Hash{}, common.Hash{}, errors.Errorf("attest: %s", err)
+	}
+
+	receipt, err := bind.WaitMined(context.Background(), s.ChainClient, tx)
+	if err != nil {
+		return common.Hash{}, common.Hash{}, errors.Errorf("wait attest: %s", err)
+	}
+	if receipt.Status != types.ReceiptStatusSuccessful {
+		reason := "unknown"
+		if len(receipt.Logs) > 0 {
+			reason = fccutils.SimulateAndDecodeRevert(
+				s.ChainClient, crypto.PubkeyToAddress(s.Prv.PublicKey), 
+				instructionSenderAddress, big.NewInt(0), nil,
+			)
+		}
+		if reason == "" {
+			reason = "unknown"
+		}
+		return common.Hash{}, common.Hash{}, errors.Errorf("attest transaction failed: %s", reason)
+	}
+
+	instructionID, err := parseInstructionID(receipt, s)
+	if err != nil {
+		return common.Hash{}, common.Hash{}, err
+	}
+	return receipt.TxHash, instructionID, nil
+}
+
+// SendAttest sends a generic market attestation instruction via InstructionSender.
+// Deprecated: Use SendAttestWithTxHash instead for transaction hash.
+func SendAttest(s *base.Support, instructionSenderAddress common.Address, message []byte, fee *big.Int,
+	contractFunc func(*contract.InstructionSender, *bind.TransactOpts, []byte) (*types.Transaction, error),
+) (common.Hash, error) {
+	_, instructionID, err := SendAttestWithTxHash(s, instructionSenderAddress, message, fee, contractFunc)
+	return instructionID, err
+}
+
 // parseInstructionID extracts the instruction ID from the TeeInstructionsSent event.
 func parseInstructionID(receipt *types.Receipt, s *base.Support) (common.Hash, error) {
 	if s.TeeExtensionRegistry != nil && len(receipt.Logs) > 0 {
