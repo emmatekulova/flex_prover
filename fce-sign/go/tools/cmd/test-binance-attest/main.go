@@ -1,3 +1,14 @@
+// test-binance-attest calls the local extension directly (no chain required) and prints
+// the signed Binance portfolio-growth attestation payload.
+//
+// Usage:
+//
+//	go run ./cmd/test-binance-attest \
+//	  -apiKey    YOUR_BINANCE_API_KEY \
+//	  -secretKey YOUR_BINANCE_SECRET_KEY \
+//	  -wallet    0xYOUR_WALLET_ADDRESS \
+//	  [-days 7] \
+//	  [-url http://127.0.0.1:8883/action]
 package main
 
 import (
@@ -13,7 +24,7 @@ import (
 	"time"
 )
 
-type action struct {
+type actionRequest struct {
 	Data actionData `json:"data"`
 }
 
@@ -34,64 +45,55 @@ type dataFixed struct {
 }
 
 type actionResult struct {
-	ID            string  `json:"id"`
-	SubmissionTag string  `json:"submissionTag"`
-	Status        int     `json:"status"`
-	Log           *string `json:"log"`
-	OpType        string  `json:"opType"`
-	OpCommand     string  `json:"opCommand"`
-	Version       string  `json:"version"`
-	Data          *string `json:"data"`
+	ID        string  `json:"id"`
+	Status    int     `json:"status"`
+	Log       *string `json:"log"`
+	OpType    string  `json:"opType"`
+	OpCommand string  `json:"opCommand"`
+	Data      *string `json:"data"`
 }
 
 func main() {
 	endpoint := flag.String("url", "http://127.0.0.1:8883/action", "extension /action endpoint")
-	mode := flag.String("mode", "ticker", "test mode: ticker, stats, account, pnl, or profile")
-	symbol := flag.String("symbol", "BTCUSDT", "binance symbol")
+	apiKey := flag.String("apiKey", "", "Binance API key (required)")
+	secretKey := flag.String("secretKey", "", "Binance secret key (required)")
+	wallet := flag.String("wallet", "", "connected Ethereum wallet address (required)")
+	days := flag.Int("days", 7, "analysis window in days (7 or 30)")
 	flag.Parse()
 
-	opCommand := "BINANCE_FETCH_AND_ATTEST"
-	reqBytes := []byte("{}")
-
-	switch strings.ToLower(strings.TrimSpace(*mode)) {
-	case "ticker":
-		req := map[string]string{"symbol": strings.ToUpper(strings.TrimSpace(*symbol))}
-		reqBytes, _ = json.Marshal(req)
-		opCommand = "BINANCE_FETCH_AND_ATTEST"
-	case "stats":
-		req := map[string]string{"symbol": strings.ToUpper(strings.TrimSpace(*symbol))}
-		reqBytes, _ = json.Marshal(req)
-		opCommand = "BINANCE_24H_STATS"
-	case "pnl":
-		// Account PnL handler ignores originalMessage for now.
-		reqBytes = []byte("{}")
-		opCommand = "BINANCE_ACCOUNT_PNL"
-	case "account":
-		// Account summary handler ignores originalMessage for now.
-		reqBytes = []byte("{}")
-		opCommand = "BINANCE_ACCOUNT_SUMMARY"
-	case "profile":
-		// User profile includes UID, account type, permissions + balances.
-		reqBytes = []byte("{}")
-		opCommand = "BINANCE_USER_PROFILE"
-	default:
-		panic("invalid -mode, use ticker, stats, account, pnl, or profile")
+	if strings.TrimSpace(*apiKey) == "" || strings.TrimSpace(*secretKey) == "" {
+		fmt.Println("error: -apiKey and -secretKey are required")
+		flag.Usage()
+		return
 	}
+	if strings.TrimSpace(*wallet) == "" {
+		fmt.Println("error: -wallet is required")
+		flag.Usage()
+		return
+	}
+
+	reqBody := map[string]interface{}{
+		"apiKey":     strings.TrimSpace(*apiKey),
+		"secretKey":  strings.TrimSpace(*secretKey),
+		"wallet":     strings.TrimSpace(*wallet),
+		"windowDays": *days,
+	}
+	reqBytes, _ := json.Marshal(reqBody)
 
 	df := dataFixed{
 		InstructionID:   "0x0000000000000000000000000000000000000000000000000000000000000001",
 		TeeID:           "0x0000000000000000000000000000000000000000",
 		Timestamp:       time.Now().Unix(),
 		OpType:          stringToBytes32Hex("MARKET"),
-		OpCommand:       stringToBytes32Hex(opCommand),
+		OpCommand:       stringToBytes32Hex("BINANCE_PROFILE_GROWTH"),
 		OriginalMessage: bytesToHex(reqBytes),
 	}
 	dfBytes, _ := json.Marshal(df)
 
-	body := action{Data: actionData{
+	body := actionRequest{Data: actionData{
 		ID:            "0x0000000000000000000000000000000000000000000000000000000000000001",
 		Type:          "instruction",
-		SubmissionTag: "manual-binance-attest-check",
+		SubmissionTag: "test-profile-growth",
 		Message:       bytesToHex(dfBytes),
 	}}
 
@@ -138,9 +140,8 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Println("✅ Binance attestation + TEE sign succeeded")
-	fmt.Printf("mode=%s\n", strings.ToLower(strings.TrimSpace(*mode)))
-	fmt.Printf("opType=%s opCommand=%s status=%d\n", bytes32HexToString(result.OpType), bytes32HexToString(result.OpCommand), result.Status)
+	fmt.Println("✅ Binance profile growth attestation succeeded")
+	fmt.Printf("wallet=%s days=%d\n", strings.TrimSpace(*wallet), *days)
 	fmt.Printf("signature_len=%d\n", len(signatureBytes))
 	fmt.Printf("payload=%s\n", string(payloadBytes))
 }
@@ -149,18 +150,6 @@ func stringToBytes32Hex(s string) string {
 	b := make([]byte, 32)
 	copy(b, []byte(s))
 	return "0x" + hex.EncodeToString(b)
-}
-
-func bytes32HexToString(h string) string {
-	b, err := hexToBytes(h)
-	if err != nil {
-		return ""
-	}
-	end := len(b)
-	for end > 0 && b[end-1] == 0 {
-		end--
-	}
-	return string(b[:end])
 }
 
 func hexToBytes(h string) ([]byte, error) {

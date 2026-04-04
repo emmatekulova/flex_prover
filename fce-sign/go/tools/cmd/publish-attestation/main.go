@@ -42,6 +42,7 @@ import (
 )
 
 // attestationStoreABIStr is the ABI for BinanceAttestationStore.
+// payload is raw JSON bytes; the contract emits them directly without ABI-decoding.
 const attestationStoreABIStr = `[
   {
     "type": "function",
@@ -85,11 +86,22 @@ func main() {
 	artifactPath := flag.String("artifact", "../../contract/out/BinanceAttestationStore.sol/BinanceAttestationStore.json", "forge artifact path (used when deploying)")
 	af := flag.String("a", base.DefaultAddressesFile, "deployed addresses file")
 	cf := flag.String("c", base.DefaultChainNodeURL, "chain RPC URL")
+	apiKey := flag.String("apiKey", "", "Binance API key (required)")
+	secretKey := flag.String("secretKey", "", "Binance secret key (required)")
+	wallet := flag.String("wallet", "", "connected Ethereum wallet address (required)")
+	days := flag.Int("days", 7, "analysis window in days (7 or 30)")
 	flag.Parse()
 
+	if strings.TrimSpace(*apiKey) == "" || strings.TrimSpace(*secretKey) == "" {
+		logger.Fatalf("-apiKey and -secretKey are required")
+	}
+	if strings.TrimSpace(*wallet) == "" {
+		logger.Fatalf("-wallet is required")
+	}
+
 	// ── Step 1: fetch attestation from local extension ──────────────────────
-	logger.Infof("Fetching Binance user profile attestation from extension...")
-	payload, signature, err := fetchAttestationFromExtension(*extURL)
+	logger.Infof("Fetching Binance profile growth attestation from extension (window=%d days)...", *days)
+	payload, signature, err := fetchAttestationFromExtension(*extURL, strings.TrimSpace(*apiKey), strings.TrimSpace(*secretKey), strings.TrimSpace(*wallet), *days)
 	if err != nil {
 		logger.Fatalf("fetch attestation: %v", err)
 	}
@@ -146,16 +158,21 @@ func main() {
 }
 
 // fetchAttestationFromExtension calls the local extension and returns (payload, signature).
-func fetchAttestationFromExtension(endpoint string) ([]byte, []byte, error) {
-	opCommand := "BINANCE_USER_PROFILE"
-	reqBytes := []byte("{}")
+func fetchAttestationFromExtension(endpoint, apiKey, secretKey, wallet string, days int) ([]byte, []byte, error) {
+	reqBody := map[string]interface{}{
+		"apiKey":     apiKey,
+		"secretKey":  secretKey,
+		"wallet":     wallet,
+		"windowDays": days,
+	}
+	reqBytes, _ := json.Marshal(reqBody)
 
 	df := dataFixed{
 		InstructionID:   "0x0000000000000000000000000000000000000000000000000000000000000001",
 		TeeID:           "0x0000000000000000000000000000000000000000",
 		Timestamp:       time.Now().Unix(),
 		OpType:          stringToBytes32Hex("MARKET"),
-		OpCommand:       stringToBytes32Hex(opCommand),
+		OpCommand:       stringToBytes32Hex("BINANCE_PROFILE_GROWTH"),
 		OriginalMessage: bytesToHex(reqBytes),
 	}
 	dfBytes, _ := json.Marshal(df)
@@ -254,6 +271,8 @@ func deployAttestationStore(s *base.Support, parsedABI abi.ABI, artifactPath str
 }
 
 // callPublishAttestation calls publishAttestation(payload, signature) on the store contract.
+// payload is passed as a Go string so it maps to Solidity string, making it human-readable
+// in on-chain explorers.
 func callPublishAttestation(s *base.Support, parsedABI abi.ABI, storeAddr common.Address, payload, signature []byte) (common.Hash, error) {
 	opts, err := bind.NewKeyedTransactorWithChainID(s.Prv, s.ChainID)
 	if err != nil {

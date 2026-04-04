@@ -2,65 +2,26 @@
 pragma solidity >=0.7.6 <0.9;
 
 /// @title BinanceAttestationStore
-/// @notice Verifies a TEE-signed ABI-encoded user profile payload and publishes
-///         it on-chain as a decoded, human-readable event.
-/// @dev The TEE signs keccak256(abiPayload) with its secp256k1 key. The contract
-///      recovers the signer address and emits individual typed fields alongside the
-///      raw payload so consumers can (a) read data directly from the event and
-///      (b) verify the attestation came from a trusted TEE via the Flare registry.
+/// @notice Stores TEE-signed Binance portfolio growth attestations on-chain.
+/// @dev The TEE produces a JSON payload and signs keccak256(payload) with its
+///      secp256k1 key. This contract recovers the signer and emits the raw payload
+///      as a permanent on-chain record. Payload format is UTF-8 JSON:
+///      {"source":"binance-profile-growth","wallet":"0x...","windowDays":7,
+///       "startSnapshot":{...},"endSnapshot":{...},"growthPercent":"9.00",...}
 contract BinanceAttestationStore {
-    struct AssetSummary {
-        string asset;
-        string total;
-        string estimatedUsdt;
-    }
-
-    struct UserProfile {
-        string   source;
-        uint64   uid;
-        string   accountType;
-        string[] permissions;
-        bool     canTrade;
-        bool     canDeposit;
-        bool     canWithdraw;
-        string   estimatedTotalUsdt;
-        uint256  unsupportedAssetCount;
-        AssetSummary[] assets;
-        uint256  fetchedAt;
-        string   version;
-    }
-
     event AttestationPublished(
-        address  indexed teeAddress,
-        uint64   indexed uid,
-        string           accountType,
-        string           estimatedTotalUsdt,
-        uint256          fetchedAt,
-        string           version,
-        bytes            rawPayload,
-        bytes            signature,
-        uint256          timestamp
+        address indexed teeAddress,
+        bytes           payload,
+        bytes           signature,
+        uint256         timestamp
     );
 
-    /// @notice Verify a TEE-signed ABI-encoded UserProfile payload and emit it
-    ///         as a permanent, human-readable on-chain record.
-    /// @param abiPayload  abi.encode(UserProfile) bytes produced by the TEE extension.
-    /// @param signature   65-byte secp256k1 ECDSA signature (r || s || v) over keccak256(abiPayload).
-    function publishAttestation(bytes calldata abiPayload, bytes calldata signature) external {
-        address teeAddress = _recoverSigner(abiPayload, signature);
-        UserProfile memory profile = abi.decode(abiPayload, (UserProfile));
-
-        emit AttestationPublished(
-            teeAddress,
-            profile.uid,
-            profile.accountType,
-            profile.estimatedTotalUsdt,
-            profile.fetchedAt,
-            profile.version,
-            abiPayload,
-            signature,
-            block.timestamp
-        );
+    /// @notice Verify a TEE-signed payload and emit it as a permanent on-chain record.
+    /// @param payload    Raw JSON bytes produced by the TEE extension.
+    /// @param signature  65-byte secp256k1 ECDSA signature (r || s || v) over keccak256(payload).
+    function publishAttestation(bytes calldata payload, bytes calldata signature) external {
+        address teeAddress = _recoverSigner(payload, signature);
+        emit AttestationPublished(teeAddress, payload, signature, block.timestamp);
     }
 
     function _recoverSigner(bytes memory payload, bytes memory sig) internal pure returns (address) {

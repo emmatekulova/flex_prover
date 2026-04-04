@@ -1,27 +1,43 @@
-# TEE Extension — Binance Attestation (Go)
+# TEE Extension — Binance Portfolio Growth Attestation (Go)
 
-A TEE extension that fetches live Binance account and market data inside a Trusted Execution Environment, signs it with the TEE's key, and publishes the attestation on-chain.
+A Flare TEE extension that fetches your Binance spot account's daily portfolio snapshots inside a Trusted Execution Environment, computes your portfolio growth percentage over the past 7 or 30 days, links the result to your on-chain wallet, signs it with the TEE's key, and publishes a permanent verifiable record on Flare Coston2 devnet.
+
+---
 
 ## What it does
 
 ```
 On-chain caller
-  → InstructionSender.fetchBinanceUserProfileAndAttest()
-    → TEE receives instruction
-      → fetches account data from Binance API (inside TEE)
-      → signs JSON payload with TEE key
-      → returns ABI-encoded (payload, signature)
-        → publish-attestation tool calls BinanceAttestationStore.publishAttestation()
-          → AttestationPublished event emitted on Coston2
+  → publish-attestation tool sends credentials + wallet to extension
+    → TEE fetches daily portfolio snapshots from Binance /sapi/v1/accountSnapshot
+      → computes growthPercent from first to last snapshot (BTC-denominated)
+        → signs JSON payload with TEE secp256k1 key
+          → publish-attestation calls BinanceAttestationStore.publishAttestation()
+            → AttestationPublished event emitted on Coston2 (payload as readable JSON)
+```
+
+Each run produces an `AttestationPublished` event. Compare `growthPercent` across multiple events over time to track portfolio performance with TEE-backed proof.
+
+### What gets attested
+
+```json
+{
+  "source": "binance-profile-growth",
+  "wallet": "0xYourWalletAddress",
+  "windowDays": 7,
+  "startSnapshot": { "date": "2026-03-28", "totalBtc": "0.12345678" },
+  "endSnapshot":   { "date": "2026-04-04", "totalBtc": "0.13456789" },
+  "growthPercent": "9.00",
+  "fetchedAt": 1712345678,
+  "version": "0.1.0"
+}
 ```
 
 The `AttestationPublished` event contains:
-- `teeAddress` — Ethereum address recovered from the TEE's ECDSA signature
-- `payload` — raw JSON (UID, account type, balances, total USD value, etc.)
+- `teeAddress` — Ethereum address recovered from the TEE's ECDSA signature (verifiable against Flare TEE machine registry)
+- `payload` — human-readable JSON string (shown as text in Coston2 explorer)
 - `signature` — 65-byte secp256k1 sig over `keccak256(payload)`
 - `timestamp` — block timestamp
-
-Anyone can verify the payload was produced inside a genuine TEE by checking `teeAddress` against the Flare TEE machine registry.
 
 ---
 
@@ -29,27 +45,26 @@ Anyone can verify the payload was produced inside a genuine TEE by checking `tee
 
 - **Docker & Docker Compose**
 - **Go 1.23+** and **Foundry** (`forge`, `cast`)
-- **Cloudflared** or ngrok (to tunnel local port to internet)
-- **A funded Coston2 wallet** (C2FLR for gas + TEE fees)
+- **Cloudflared** or ngrok (to expose local port to the internet)
+- **A funded Coston2 wallet** (C2FLR for gas + TEE fees — get from [Coston2 faucet](https://faucet.flare.network/))
+- **Binance account** with API key enabled (read-only permissions are sufficient)
 
 ---
 
-## Setup
+## Required environment variables
 
-### Step 0: Configure environment
+Copy `.env.example` to `.env` and fill in:
 
-```bash
-cp .env.example .env
-```
+| Variable | Purpose |
+|----------|---------|
+| `PRIVATE_KEY` | Funded Coston2 private key, **no 0x prefix** |
+| `INITIAL_OWNER` | Your Coston2 wallet address (`0x...`) |
+| `INSTRUCTION_SENDER` | Set after Step 1 |
+| `EXTENSION_ID` | Set after Step 2 |
+| `TUNNEL_URL` | Public URL from cloudflared/ngrok |
+| `ATTESTATION_STORE` | Optional — reuse an existing store contract |
 
-Fill in `.env`:
-```bash
-PRIVATE_KEY="<your funded Coston2 private key, no 0x>"
-INITIAL_OWNER="0x<your wallet address>"
-BINANCE_API_KEY="<your Binance API key>"
-BINANCE_SECRET_KEY="<your Binance secret key>"
-LANGUAGE=go
-```
+> **Binance credentials are never stored in env vars.** Pass them directly as CLI flags at runtime.
 
 Also copy the proxy config:
 ```bash
@@ -57,14 +72,18 @@ cp config/proxy/extension_proxy.toml.example config/proxy/extension_proxy.toml
 # Fill in [db] section with your Coston2 C-chain indexer credentials
 ```
 
+---
+
+## One-time setup
+
 ### Step 1: Deploy the InstructionSender contract
 
 ```bash
-cd go/tools
+cd fce-sign/go/tools
 go run ./cmd/deploy-contract
 ```
 
-Copy the printed address to `.env`:
+Add the printed address to `.env`:
 ```bash
 INSTRUCTION_SENDER="0x<printed address>"
 ```
@@ -75,7 +94,7 @@ INSTRUCTION_SENDER="0x<printed address>"
 go run ./cmd/register-extension --instructionSender $INSTRUCTION_SENDER
 ```
 
-Copy the printed extension ID to `.env`:
+Add the printed extension ID to `.env`:
 ```bash
 EXTENSION_ID="0x<printed id>"
 ```
@@ -88,7 +107,7 @@ docker compose build
 docker compose up -d
 ```
 
-Wait for the proxy:
+Wait for the proxy to be ready:
 ```bash
 until curl -sf http://localhost:6676/info >/dev/null 2>&1; do sleep 2; done
 echo "proxy ready"
@@ -102,15 +121,14 @@ cloudflared tunnel --url http://localhost:6676
 # or: ngrok http 6676
 ```
 
-Copy the printed URL to `.env`:
+Add the printed URL to `.env`:
 ```bash
 TUNNEL_URL="https://<your-tunnel>.trycloudflare.com"
 ```
 
-### Step 5: Allow TEE version
+### Step 5: Allow the TEE version
 
 ```bash
-cd go/tools
 go run ./cmd/allow-tee-version -p http://localhost:6676
 ```
 
@@ -121,63 +139,50 @@ go run ./cmd/register-tee -p http://localhost:6676 -l
 # -l = local test mode (fake attestation token, required on Coston2 testnet)
 ```
 
-### Step 7: Run the end-to-end test
-
-```bash
-go run ./cmd/run-test --instructionSender $INSTRUCTION_SENDER -p http://localhost:6676
-```
-
 ---
 
-## Fetching Binance data (local test)
+## Local test (no chain required)
 
-Test any handler directly against the running extension without going through the chain:
+Verify the TEE extension produces a valid growth attestation without touching the chain:
 
 ```bash
-cd go/tools
-
-# Current ticker price
-go run ./cmd/test-binance-attest -mode ticker -symbol BTCUSDT
-
-# 24h market stats
-go run ./cmd/test-binance-attest -mode stats -symbol BTCUSDT
-
-# Spot account balances + total USDT (requires BINANCE_API_KEY)
-go run ./cmd/test-binance-attest -mode account
-
-# Futures PnL (requires futures account)
-go run ./cmd/test-binance-attest -mode pnl
-
-# Full user profile: UID, account type, permissions, balances (requires BINANCE_API_KEY)
-go run ./cmd/test-binance-attest -mode profile
+cd fce-sign/go/tools
+go run ./cmd/test-binance-attest \
+  -apiKey    YOUR_BINANCE_API_KEY \
+  -secretKey YOUR_BINANCE_SECRET_KEY \
+  -wallet    0xYOUR_WALLET_ADDRESS
 ```
 
-Each mode prints the signed payload and signature. Example for `profile`:
+Optional flags: `-days 30` (default 7), `-url http://127.0.0.1:8883/action`
+
+Example output:
 ```
-✅ Binance attestation + TEE sign succeeded
-mode=profile
-payload={"source":"binance-user-profile","uid":1228038409,"accountType":"SPOT",
-         "permissions":["TRD_GRP_041"],"canTrade":true,...}
+✅ Binance profile growth attestation succeeded
+wallet=0xYour... days=7
 signature_len=65
+payload={"source":"binance-profile-growth","wallet":"0xYour...","windowDays":7,"startSnapshot":{"date":"2026-03-28","totalBtc":"0.12345678"},"endSnapshot":{"date":"2026-04-04","totalBtc":"0.13456789"},"growthPercent":"9.00","fetchedAt":1712345678,"version":"0.1.0"}
 ```
 
 ---
 
-## Publishing attestations on-chain
-
-`BinanceAttestationStore` is a standalone contract that verifies TEE signatures and emits permanent on-chain events. Anyone can submit a valid (payload, signature) pair.
-
-### Deploy the store and publish in one step
+## The main command — publish on-chain
 
 ```bash
-cd go/tools
-go run ./cmd/publish-attestation
+cd fce-sign/go/tools
+go run ./cmd/publish-attestation \
+  -apiKey    YOUR_BINANCE_API_KEY \
+  -secretKey YOUR_BINANCE_SECRET_KEY \
+  -wallet    0xYOUR_WALLET_ADDRESS
 ```
 
-Output:
+Optional flags:
+- `-days 30` — use 30-day window instead of 7
+- `-store 0x<addr>` — reuse an existing BinanceAttestationStore (skip deploy; or set `ATTESTATION_STORE` in `.env`)
+
+Example output:
 ```
-Fetching Binance user profile attestation from extension...
-  Payload (398 bytes): {"source":"binance-user-profile","uid":...}
+Fetching Binance profile growth attestation from extension (window=7 days)...
+  Payload (312 bytes): {"source":"binance-profile-growth",...}
   Signature (65 bytes): 7147...
 No -store address given, deploying BinanceAttestationStore...
   BinanceAttestationStore deployed at: 0x<address>
@@ -188,104 +193,71 @@ Publishing attestation on-chain...
 ✅ Attestation published on-chain!
 ```
 
-Add the store address to `.env` so subsequent runs skip deployment:
-```bash
-ATTESTATION_STORE="0x<address>"
+---
+
+## How the TEE flow works
+
+```
+CLI tool (publish-attestation)
+  │
+  ├─ POSTs credentials + wallet to extension /action endpoint
+  │    (inside Docker, runs in hardware TEE)
+  │
+  └─ Extension handler (handleBinanceProfileGrowth):
+       1. Calls Binance /sapi/v1/accountSnapshot?type=SPOT&limit=7
+       2. Computes growthPercent = (endBTC - startBTC) / startBTC × 100
+       3. Builds JSON payload with wallet + growth data
+       4. Signs keccak256(payload) with TEE secp256k1 key via internal /sign endpoint
+       5. Returns ABI-encoded (payload, signature)
+
+publish-attestation then:
+  1. Decodes (payload, signature)
+  2. Deploys BinanceAttestationStore if needed
+  3. Calls publishAttestation(payloadString, signature) on-chain
+  4. Contract recovers TEE address via ecrecover and emits AttestationPublished
 ```
 
-### View on Coston2 explorer
+The TEE address is verifiable against the Flare TEE machine registry — anyone can confirm the data came from a genuine TEE.
 
+---
+
+## How on-chain submission works
+
+`BinanceAttestationStore` is a standalone Solidity contract on Coston2. Anyone can submit a valid `(payload, signature)` pair:
+
+1. Contract calls `ecrecover(keccak256(payload), signature)` to recover the TEE address
+2. Emits `AttestationPublished(teeAddress, payload, signature, timestamp)`
+3. The `payload` field is `bytes` containing UTF-8 JSON — decode the hex as UTF-8 to read it
+
+View your attestation on the [Coston2 explorer](https://coston2-explorer.flare.network/):
 ```
 https://coston2-explorer.flare.network/tx/0x<tx hash>
 ```
-
-Look for the `AttestationPublished` event in the transaction logs. The decoded event shows the TEE address, payload, and timestamp.
-
-### Re-use an existing store
-
-```bash
-go run ./cmd/publish-attestation -store 0x<address>
-# or set ATTESTATION_STORE in .env
-```
+Look for the `AttestationPublished` event. The `payload` log field shows the JSON directly.
 
 ---
 
-## Supported op commands
+## Devnet prerequisites
 
-All handlers live under `OP_TYPE = MARKET`:
-
-| `opCommand` | Data fetched | Binance endpoint | Auth |
-|---|---|---|---|
-| `BINANCE_FETCH_AND_ATTEST` | Current ticker price | `/api/v3/ticker/price` | No |
-| `BINANCE_24H_STATS` | 24h market stats | `/api/v3/ticker/24hr` | No |
-| `BINANCE_ACCOUNT_SUMMARY` | Spot balances + total USDT | `/api/v3/account` | Yes |
-| `BINANCE_ACCOUNT_PNL` | Futures wallet + unrealised PnL | `/fapi/v2/account` | Yes + futures |
-| `BINANCE_USER_PROFILE` | UID, account type, permissions, balances | `/api/v3/account` | Yes |
-
-All handlers return ABI-encoded `(bytes payload, bytes signature)` where `signature` is a 65-byte secp256k1 ECDSA signature over `keccak256(payload)`.
-
----
-
-## Contracts
-
-| Contract | Purpose |
-|---|---|
-| `InstructionSender.sol` | Sends instructions to the TEE; one function per op command |
-| `BinanceAttestationStore.sol` | Verifies TEE sig on-chain, emits `AttestationPublished` event |
-
-### Regenerating Go bindings after changing InstructionSender.sol
-
-```bash
-# Compile
-cd contract && forge build
-
-# Extract ABI + bytecode
-jq -r '.abi' out/InstructionSender.sol/InstructionSender.json > ../go/tools/app/contract/InstructionSender.abi
-jq -r '.bytecode.object' out/InstructionSender.sol/InstructionSender.json > ../go/tools/app/contract/InstructionSender.bin
-
-# Regenerate Go bindings
-cd ../go/tools && go generate ./...
-```
-
----
-
-## Extending this for your hackathon project
-
-Modify files in `internal/app/` to build your own TEE extension:
-
-| File | What to change |
-|------|----------------|
-| `internal/app/handlers.go` | Add your handler functions, register them in `Register()` |
-| `internal/app/config.go` | Add your `OpType`/`OpCommand` constants (must match Solidity) |
-| `internal/app/types.go` | Add request/response types |
-| `contract/InstructionSender.sol` | Add a function for each new op command |
-
-Handler signature:
-```go
-func myHandler(msg string) (data *string, status int, err error) {
-    // msg: hex-encoded originalMessage from the on-chain instruction
-    // Return: ABI-encoded result hex, status (0=error, 1=success, >=2=pending), error
-    return &dataHex, 1, nil
-}
-```
-
-The `internal/base/` package is framework infrastructure — don't modify it.
+- **Coston2 faucet**: get free C2FLR at [faucet.flare.network](https://faucet.flare.network/)
+- **Chain RPC**: `https://coston2-api.flare.network/ext/C/rpc` (default, no config needed)
+- The Docker stack must be running and the tunnel must be active before running `publish-attestation`
 
 ---
 
 ## Tools reference
 
-All commands run from `go/tools/`. They read `PRIVATE_KEY`, `CHAIN_URL`, and `ADDRESSES_FILE` from `.env` at the repo root.
+All commands run from `fce-sign/go/tools/`.
 
 | Command | Purpose |
-|---|---|
-| `deploy-contract` | Deploy InstructionSender |
-| `register-extension` | Register extension on Flare TEE registry |
-| `allow-tee-version` | Whitelist TEE code hash + platform |
-| `register-tee` | Register TEE machine (pre-reg → attest → produce) |
-| `run-test` | End-to-end test (ECIES key update + sign + verify) |
-| `test-binance-attest` | Direct handler test (no chain required) |
-| `publish-attestation` | Fetch profile + deploy store + publish on-chain |
+|---------|---------|
+| `test-binance-attest` | Direct handler test — no chain required |
+| `publish-attestation` | **Main command** — fetch growth, deploy store if needed, publish on-chain |
+| `deploy-contract` | One-time: deploy InstructionSender |
+| `register-extension` | One-time: register extension on Flare TEE registry |
+| `allow-tee-version` | One-time: whitelist TEE code hash + platform |
+| `register-tee` | One-time: register TEE machine |
+| `run-test` | E2E test: ECIES key update + sign + verify |
 
 ---
 
@@ -293,9 +265,12 @@ All commands run from `go/tools/`. They read `PRIVATE_KEY`, `CHAIN_URL`, and `AD
 
 | Error | Fix |
 |-------|-----|
-| `extension ID not set` | Run `go run ./cmd/run-test` (calls `setExtensionId` first) |
+| `apiKey and secretKey are required` | Pass `-apiKey` and `-secretKey` flags |
+| `wallet address is required` | Pass `-wallet 0x...` flag |
+| `not enough snapshots returned` | Binance account may have no trading history; check account has been active |
+| `extension ID not set` | Run `go run ./cmd/run-test` first (calls `setExtensionId`) |
 | `501 unsupported op type` | Rebuild Docker image: `docker compose build extension-tee && docker compose up -d extension-tee` |
-| Binance 400 error | Symbol format should be `BTCUSDT` not `BTC/USDT` |
+| Binance `400` on snapshot | Account may not have spot wallet history; ensure spot account is activated |
 | `FeeTooLow` revert | Increase `FEE_WEI` in `.env` |
 | Tunnel drops | Restart cloudflared, update `TUNNEL_URL`, re-run steps 5–6 |
 | `ecrecover failed` | Signature length must be exactly 65 bytes |

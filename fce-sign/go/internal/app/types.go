@@ -33,6 +33,13 @@ type BinanceFetchRequest struct {
 	Symbol string `json:"symbol"`
 }
 
+// BinanceAuthenticatedRequest carries optional Binance credentials for
+// authenticated account-style handlers.
+type BinanceAuthenticatedRequest struct {
+	APIKey    string `json:"apiKey"`
+	SecretKey string `json:"secretKey"`
+}
+
 // BinanceTickerPriceResponse matches Binance /api/v3/ticker/price response.
 type BinanceTickerPriceResponse struct {
 	Symbol string `json:"symbol"`
@@ -127,6 +134,50 @@ type BinanceUserProfileAttestationPayload struct {
 	Assets              []BinanceAccountAssetSummary `json:"assets"`
 	FetchedAt           int64                        `json:"fetchedAt"`
 	Version             string                       `json:"version"`
+}
+
+// BinanceProfileGrowthRequest is the originalMessage payload for growth attestation.
+type BinanceProfileGrowthRequest struct {
+	APIKey     string `json:"apiKey"`
+	SecretKey  string `json:"secretKey"`
+	Wallet     string `json:"wallet"`     // connected on-chain wallet address
+	WindowDays int    `json:"windowDays"` // 7 or 30; handler defaults to 7 if ≤ 0
+}
+
+// BinanceSnapshotPoint is one daily portfolio snapshot.
+type BinanceSnapshotPoint struct {
+	Date     string `json:"date"`     // "YYYY-MM-DD"
+	TotalBTC string `json:"totalBtc"` // totalAssetOfBtc from Binance
+}
+
+// BinanceProfileGrowthPayload is what the TEE signs for the growth attestation.
+// Financial detail is kept minimal — only growthPercent is included.
+type BinanceProfileGrowthPayload struct {
+	Source        string               `json:"source"`        // "binance-profile-growth"
+	Wallet        string               `json:"wallet"`
+	WindowDays    int                  `json:"windowDays"`
+	StartSnapshot BinanceSnapshotPoint `json:"startSnapshot"`
+	EndSnapshot   BinanceSnapshotPoint `json:"endSnapshot"`
+	GrowthPercent string               `json:"growthPercent"`
+	FetchedAt     int64                `json:"fetchedAt"`
+	Version       string               `json:"version"`
+}
+
+// BinanceAccountSnapshotResponse is returned by GET /sapi/v1/accountSnapshot.
+type BinanceAccountSnapshotResponse struct {
+	Code        int                 `json:"code"`
+	SnapshotVos []BinanceSnapshotVo `json:"snapshotVos"`
+}
+
+// BinanceSnapshotVo is one element in the snapshotVos array.
+type BinanceSnapshotVo struct {
+	Data       BinanceSnapshotData `json:"data"`
+	UpdateTime int64               `json:"updateTime"` // millisecond epoch
+}
+
+// BinanceSnapshotData holds the portfolio value for one snapshot.
+type BinanceSnapshotData struct {
+	TotalAssetOfBtc string `json:"totalAssetOfBtc"`
 }
 
 // BinanceFuturesAccountResponse matches key fields from Binance USD-M futures account endpoint.
