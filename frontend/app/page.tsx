@@ -24,8 +24,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import type { AttestationApiResponse, AttestationResult } from "@/lib/attestation"
+import type { AttestationApiResponse, AttestationResult, IndividualTradesResult, PositionsFetchResponse, TradePosition } from "@/lib/attestation"
 import { ProofCard } from "@/components/proof-card"
+import { TradesProofCard } from "@/components/trades-proof-card"
 
 const steps = [
   { id: 1, title: "Wallet", description: "Connect your wallet" },
@@ -58,6 +59,14 @@ export default function FlexProver() {
   const [logs, setLogs] = useState<string[]>([])
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [attestationResult, setAttestationResult] = useState<AttestationResult | null>(null)
+
+  // Individual trades state
+  const [attestationType, setAttestationType] = useState<"portfolio-growth" | "individual-trades">("portfolio-growth")
+  const [availablePositions, setAvailablePositions] = useState<TradePosition[]>([])
+  const [selectedAssets, setSelectedAssets] = useState<Set<string>>(new Set())
+  const [positionsFetching, setPositionsFetching] = useState(false)
+  const [positionsError, setPositionsError] = useState<string | null>(null)
+  const [tradesResult, setTradesResult] = useState<IndividualTradesResult | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -147,6 +156,9 @@ export default function FlexProver() {
           secretKey,
           ...(passphrase ? { passphrase } : {}),
           wallet: walletAddress,
+          windowDays,
+          attestationType,
+          ...(attestationType === "individual-trades" ? { selectedAssets: [...selectedAssets] } : {}),
         }),
       })
 
@@ -157,10 +169,19 @@ export default function FlexProver() {
 
       await addLog("Publishing attestation on-chain...")
       const data = (await res.json()) as AttestationApiResponse
-      await addLog(`Reading attestation by TX hash: ${data.result.txHash.slice(0, 12)}...`)
-      await addLog("Attestation fetched successfully.")
 
-      setAttestationResult(data.result)
+      if (data.tradesResult) {
+        await addLog(`Reading attestation by TX hash: ${data.tradesResult.txHash.slice(0, 12)}...`)
+        await addLog("Attestation fetched successfully.")
+        setTradesResult(data.tradesResult)
+      } else if (data.result) {
+        await addLog(`Reading attestation by TX hash: ${data.result.txHash.slice(0, 12)}...`)
+        await addLog("Attestation fetched successfully.")
+        setAttestationResult(data.result)
+      } else {
+        throw new Error("Unexpected response from attestation endpoint")
+      }
+
       setAppState("wizard")
       setCurrentStep(5)
     } catch (error) {
@@ -182,6 +203,11 @@ export default function FlexProver() {
         return
       }
       setApiCredentials(saved)
+      setAttestationType(saved.attestationType)
+      // Reset trades state when moving to step 3
+      setAvailablePositions([])
+      setSelectedAssets(new Set())
+      setPositionsError(null)
     }
 
     if (currentStep < 4) {
@@ -203,9 +229,45 @@ export default function FlexProver() {
     setApiVerified(false)
     setApiCredentials(null)
     setAttestationResult(null)
+    setTradesResult(null)
     setSubmitError(null)
     setLogs([])
     setLogoRevealed(false)
+    setAttestationType("portfolio-growth")
+    setAvailablePositions([])
+    setSelectedAssets(new Set())
+    setPositionsError(null)
+  }
+
+  const fetchPositions = async () => {
+    if (!apiCredentials) return
+    setPositionsFetching(true)
+    setPositionsError(null)
+    try {
+      const res = await fetch("/api/positions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          exchange: apiCredentials.exchange,
+          apiKey: apiCredentials.keys.apiKey?.trim(),
+          secretKey: apiCredentials.keys.secretKey?.trim(),
+          ...(apiCredentials.keys.passphrase ? { passphrase: apiCredentials.keys.passphrase.trim() } : {}),
+        }),
+      })
+      if (!res.ok) {
+        const err = (await res.json()) as { error?: string }
+        throw new Error(err.error ?? "Failed to fetch positions")
+      }
+      const data = (await res.json()) as PositionsFetchResponse
+      const positions = Array.isArray(data.positions) ? data.positions : []
+      setAvailablePositions(positions)
+      // Pre-select all by default
+      setSelectedAssets(new Set(positions.map((p) => p.asset)))
+    } catch (error) {
+      setPositionsError(error instanceof Error ? error.message : "Unknown error")
+    } finally {
+      setPositionsFetching(false)
+    }
   }
 
   const Header = ({ showTabs = false }: { showTabs?: boolean }) => (
@@ -436,61 +498,148 @@ export default function FlexProver() {
                         exit={{ opacity: 0, x: -20 }}
                         className="max-w-xl mx-auto space-y-6"
                       >
-                        <div>
-                          <h2 className="text-2xl font-bold text-foreground mb-2">Settings</h2>
-                          <p className="text-muted-foreground">Select the range of days for the transaction data.</p>
-                        </div>
+                        {attestationType === "individual-trades" ? (
+                          <>
+                            <div>
+                              <h2 className="text-2xl font-bold text-foreground mb-2">Select Positions</h2>
+                              <p className="text-muted-foreground">Choose which open positions to include in your attestation.</p>
+                            </div>
 
-                        <div className="rounded-xl border border-border bg-card p-6 sm:p-8 space-y-6">
-                          <div className="flex items-center justify-between">
-                            <p className="text-sm text-muted-foreground">Transaction window</p>
-                            <p className="text-lg font-semibold text-foreground">{windowDays} day{windowDays === 1 ? "" : "s"}</p>
-                          </div>
+                            <div className="rounded-xl border border-border bg-card p-6 space-y-4">
+                              {availablePositions.length === 0 && !positionsFetching && (
+                                <div className="text-center space-y-3">
+                                  <p className="text-sm text-muted-foreground">
+                                    Fetch your current open positions from {apiCredentials?.exchange === "bitget" ? "Bitget" : "Binance"}.
+                                  </p>
+                                  {positionsError && (
+                                    <p className="text-xs text-red-400">{positionsError}</p>
+                                  )}
+                                  <Button onClick={fetchPositions} className="bg-primary text-primary-foreground hover:bg-primary/90">
+                                    Fetch Open Positions
+                                  </Button>
+                                </div>
+                              )}
 
-                          <div className="flex items-center gap-3">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="icon"
-                              className="shrink-0"
-                              onClick={() => setWindowDays((prev) => Math.max(1, prev - 1))}
-                              disabled={windowDays <= 1}
-                              aria-label="Decrease days"
-                            >
-                              -
-                            </Button>
+                              {positionsFetching && (
+                                <p className="text-sm text-muted-foreground text-center">Fetching positions...</p>
+                              )}
 
-                            <Slider
-                              min={1}
-                              max={30}
-                              step={1}
-                              value={[windowDays]}
-                              onValueChange={(value) => setWindowDays(value[0] ?? 7)}
-                              aria-label="Transaction window in days"
-                            />
+                              {availablePositions.length > 0 && (
+                                <>
+                                  <div className="flex items-center justify-between">
+                                    <p className="text-sm text-muted-foreground">{selectedAssets.size} of {availablePositions.length} selected</p>
+                                    <div className="flex gap-2">
+                                      <button
+                                        type="button"
+                                        className="text-xs text-primary hover:underline"
+                                        onClick={() => setSelectedAssets(new Set(availablePositions.map((p) => p.asset)))}
+                                      >
+                                        Select All
+                                      </button>
+                                      <span className="text-muted-foreground">·</span>
+                                      <button
+                                        type="button"
+                                        className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                                        onClick={() => setSelectedAssets(new Set())}
+                                      >
+                                        Clear
+                                      </button>
+                                    </div>
+                                  </div>
 
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="icon"
-                              className="shrink-0"
-                              onClick={() => setWindowDays((prev) => Math.min(30, prev + 1))}
-                              disabled={windowDays >= 30}
-                              aria-label="Increase days"
-                            >
-                              +
-                            </Button>
-                          </div>
+                                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                                    {availablePositions.map((pos) => {
+                                      const checked = selectedAssets.has(pos.asset)
+                                      return (
+                                        <label
+                                          key={pos.asset}
+                                          className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-secondary/40 cursor-pointer transition-colors"
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onChange={() => {
+                                              setSelectedAssets((prev) => {
+                                                const next = new Set(prev)
+                                                if (next.has(pos.asset)) next.delete(pos.asset)
+                                                else next.add(pos.asset)
+                                                return next
+                                              })
+                                            }}
+                                            className="w-4 h-4 accent-primary"
+                                          />
+                                          <span className="font-semibold text-foreground w-16">{pos.asset}</span>
+                                          <span className="text-sm text-muted-foreground font-mono flex-1">{pos.quantity}</span>
+                                          <span className="text-sm font-mono text-foreground">
+                                            ${Number(pos.valueUsdt).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                          </span>
+                                        </label>
+                                      )
+                                    })}
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div>
+                              <h2 className="text-2xl font-bold text-foreground mb-2">Settings</h2>
+                              <p className="text-muted-foreground">Select the range of days for the transaction data.</p>
+                            </div>
 
-                          <div className="flex justify-between text-xs text-muted-foreground">
-                            <span>1 day</span>
-                            <span>30 days</span>
-                          </div>
+                            <div className="rounded-xl border border-border bg-card p-6 sm:p-8 space-y-6">
+                              <div className="flex items-center justify-between">
+                                <p className="text-sm text-muted-foreground">Transaction window</p>
+                                <p className="text-lg font-semibold text-foreground">{windowDays} day{windowDays === 1 ? "" : "s"}</p>
+                              </div>
 
-                          <p className="text-sm text-muted-foreground">
-                            Default is 7 days. Click Continue to confirm this selection.
-                          </p>
-                        </div>
+                              <div className="flex items-center gap-3">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="icon"
+                                  className="shrink-0"
+                                  onClick={() => setWindowDays((prev) => Math.max(1, prev - 1))}
+                                  disabled={windowDays <= 1}
+                                  aria-label="Decrease days"
+                                >
+                                  -
+                                </Button>
+
+                                <Slider
+                                  min={1}
+                                  max={30}
+                                  step={1}
+                                  value={[windowDays]}
+                                  onValueChange={(value) => setWindowDays(value[0] ?? 7)}
+                                  aria-label="Transaction window in days"
+                                />
+
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="icon"
+                                  className="shrink-0"
+                                  onClick={() => setWindowDays((prev) => Math.min(30, prev + 1))}
+                                  disabled={windowDays >= 30}
+                                  aria-label="Increase days"
+                                >
+                                  +
+                                </Button>
+                              </div>
+
+                              <div className="flex justify-between text-xs text-muted-foreground">
+                                <span>1 day</span>
+                                <span>30 days</span>
+                              </div>
+
+                              <p className="text-sm text-muted-foreground">
+                                Default is 7 days. Click Continue to confirm this selection.
+                              </p>
+                            </div>
+                          </>
+                        )}
                       </motion.div>
                     )}
 
@@ -516,15 +665,22 @@ export default function FlexProver() {
                             <p className="text-xs text-muted-foreground mb-1">{apiCredentials ? `${apiCredentials.exchange.charAt(0).toUpperCase() + apiCredentials.exchange.slice(1)} credentials` : "Exchange credentials"}</p>
                             <p className="font-semibold text-foreground">{apiCredentials ? "Ready" : "Not captured yet"}</p>
                           </div>
-                          <div className="p-4 rounded-xl bg-secondary/50 border border-border">
-                            <p className="text-xs text-muted-foreground mb-1">Transaction data window</p>
-                            <p className="font-semibold text-foreground">{windowDays} day{windowDays === 1 ? "" : "s"}</p>
-                          </div>
+                          {attestationType === "individual-trades" ? (
+                            <div className="p-4 rounded-xl bg-secondary/50 border border-border">
+                              <p className="text-xs text-muted-foreground mb-1">Attesting positions</p>
+                              <p className="font-semibold text-foreground">{selectedAssets.size} position{selectedAssets.size === 1 ? "" : "s"} selected: {[...selectedAssets].join(", ")}</p>
+                            </div>
+                          ) : (
+                            <div className="p-4 rounded-xl bg-secondary/50 border border-border">
+                              <p className="text-xs text-muted-foreground mb-1">Transaction data window</p>
+                              <p className="font-semibold text-foreground">{windowDays} day{windowDays === 1 ? "" : "s"}</p>
+                            </div>
+                          )}
                         </div>
                       </motion.div>
                     )}
 
-                    {currentStep === 5 && attestationResult && (
+                    {currentStep === 5 && (attestationResult || tradesResult) && (
                       <motion.div
                         key="step5"
                         initial={{ opacity: 0, x: 20 }}
@@ -537,14 +693,27 @@ export default function FlexProver() {
                           <p className="text-muted-foreground">Published on-chain and verified. Share your proof below.</p>
                         </div>
 
-                        <ProofCard
-                          walletAddress={attestationResult.attestedWallet || attestationResult.providedWallet}
-                          profitPercent={attestationResult.profitPercent}
-                          txHash={attestationResult.txHash}
-                          startDate={attestationResult.startDate}
-                          endDate={attestationResult.endDate}
-                          exchange={apiCredentials?.exchange}
-                        />
+                        {attestationResult && (
+                          <ProofCard
+                            walletAddress={attestationResult.attestedWallet || attestationResult.providedWallet}
+                            profitPercent={attestationResult.profitPercent}
+                            txHash={attestationResult.txHash}
+                            startDate={attestationResult.startDate}
+                            endDate={attestationResult.endDate}
+                            exchange={apiCredentials?.exchange}
+                          />
+                        )}
+
+                        {tradesResult && (
+                          <TradesProofCard
+                            walletAddress={tradesResult.attestedWallet || tradesResult.providedWallet}
+                            positions={tradesResult.positions}
+                            totalUsdt={tradesResult.totalUsdt}
+                            txHash={tradesResult.txHash}
+                            fetchedAt={tradesResult.fetchedAt}
+                            exchange={apiCredentials?.exchange}
+                          />
+                        )}
                       </motion.div>
                     )}
                   </AnimatePresence>
@@ -571,7 +740,8 @@ export default function FlexProver() {
                         disabled={
                           (currentStep === 1 && !walletConnected) ||
                           (currentStep === 2 && !apiVerified) ||
-                          (currentStep === 3 && (windowDays < 1 || windowDays > 30))
+                          (currentStep === 3 && attestationType === "portfolio-growth" && (windowDays < 1 || windowDays > 30)) ||
+                          (currentStep === 3 && attestationType === "individual-trades" && selectedAssets.size === 0)
                         }
                         className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90"
                       >

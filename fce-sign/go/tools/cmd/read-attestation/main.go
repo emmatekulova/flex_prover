@@ -118,6 +118,16 @@ func main() {
 			return
 		}
 
+		// Source-aware pretty-print for individual trades attestations.
+		var payloadMap map[string]interface{}
+		if json.Unmarshal(payload, &payloadMap) == nil {
+			src, _ := payloadMap["source"].(string)
+			if src == "binance-individual-trades" || src == "bitget-individual-trades" {
+				printIndividualTradesAttestation(teeAddress.Hex(), timestamp.String(), signature, payloadMap)
+				return
+			}
+		}
+
 		prettyBytes, _ := json.MarshalIndent(parsedPayload, "", "  ")
 		fmt.Println("--- Attestation ----------------------------------------")
 		fmt.Printf("TEE address : %s\n", teeAddress.Hex())
@@ -131,6 +141,43 @@ func main() {
 
 	fmt.Fprintln(os.Stderr, "no AttestationPublished event found in transaction logs")
 	os.Exit(1)
+}
+
+func printIndividualTradesAttestation(teeAddr, timestamp string, sig []byte, p map[string]interface{}) {
+	wallet, _ := p["wallet"].(string)
+	totalUsdt, _ := p["totalUsdt"].(string)
+	source, _ := p["source"].(string)
+
+	exchange := "Binance"
+	if strings.HasPrefix(source, "bitget") {
+		exchange = "Bitget"
+	}
+
+	fmt.Println("--- Individual Trades Attestation ----------------------")
+	fmt.Printf("TEE address : %s\n", teeAddr)
+	fmt.Printf("Timestamp   : %s\n", timestamp)
+	fmt.Printf("Signature   : %x\n", sig)
+	fmt.Printf("Wallet      : %s\n", wallet)
+	fmt.Printf("Exchange    : %s\n", exchange)
+	fmt.Println()
+	fmt.Printf("  %-8s  %-20s  %-16s  %s\n", "Asset", "Quantity", "Price (USDT)", "Value (USDT)")
+	fmt.Printf("  %-8s  %-20s  %-16s  %s\n", "-------", "-------------------", "---------------", "-----------")
+
+	if positions, ok := p["positions"].([]interface{}); ok {
+		for _, pos := range positions {
+			if m, ok := pos.(map[string]interface{}); ok {
+				asset, _ := m["asset"].(string)
+				qty, _ := m["quantity"].(string)
+				price, _ := m["priceUsdt"].(string)
+				value, _ := m["valueUsdt"].(string)
+				fmt.Printf("  %-8s  %-20s  %-16s  %s\n", asset, qty, price, value)
+			}
+		}
+	}
+
+	fmt.Println()
+	fmt.Printf("  Total Value : %s USDT\n", totalUsdt)
+	fmt.Println("--------------------------------------------------------")
 }
 
 func readBytes(data []byte, offset int64) ([]byte, error) {

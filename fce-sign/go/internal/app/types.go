@@ -270,3 +270,50 @@ type BitgetFuturesAccountsResponse struct {
 	Code string                 `json:"code"`
 	Data []BitgetFuturesAccount `json:"data"`
 }
+
+// ── Individual Trades types ───────────────────────────────────────────────────
+
+// TradePosition is one open spot holding included in an individual trades attestation.
+type TradePosition struct {
+	Asset     string `json:"asset"`
+	Quantity  string `json:"quantity"`
+	PriceUSDT string `json:"priceUsdt"`
+	ValueUSDT string `json:"valueUsdt"`
+}
+
+// BinanceIndividualTradesRequest is the originalMessage payload for the Binance individual trades handler.
+type BinanceIndividualTradesRequest struct {
+	APIKey         string   `json:"apiKey"`
+	SecretKey      string   `json:"secretKey"`
+	Wallet         string   `json:"wallet"`
+	SelectedAssets []string `json:"selectedAssets"` // empty = include all non-zero positions
+}
+
+// BinanceIndividualTradesPayload is what the TEE signs for a Binance individual trades attestation.
+type BinanceIndividualTradesPayload struct {
+	Source    string          `json:"source"` // "binance-individual-trades"
+	Wallet    string          `json:"wallet"`
+	Positions []TradePosition `json:"positions"`
+	TotalUSDT string          `json:"totalUsdt"`
+	FetchedAt int64           `json:"fetchedAt"`
+	Version   string          `json:"version"`
+}
+
+// BitgetIndividualTradesRequest is the originalMessage payload for the Bitget individual trades handler.
+type BitgetIndividualTradesRequest struct {
+	APIKey         string   `json:"apiKey"`
+	SecretKey      string   `json:"secretKey"`
+	Passphrase     string   `json:"passphrase"`
+	Wallet         string   `json:"wallet"`
+	SelectedAssets []string `json:"selectedAssets"` // empty = include all non-zero positions
+}
+
+// BitgetIndividualTradesPayload is what the TEE signs for a Bitget individual trades attestation.
+type BitgetIndividualTradesPayload struct {
+	Source    string          `json:"source"` // "bitget-individual-trades"
+	Wallet    string          `json:"wallet"`
+	Positions []TradePosition `json:"positions"`
+	TotalUSDT string          `json:"totalUsdt"`
+	FetchedAt int64           `json:"fetchedAt"`
+	Version   string          `json:"version"`
+}

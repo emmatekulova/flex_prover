@@ -20,6 +20,9 @@ const (
 	OpCommandBinanceProfileGrowth   = "BINANCE_PROFILE_GROWTH"
 
 	OpCommandBitgetProfileGrowth = "BITGET_PROFILE_GROWTH"
+
+	OpCommandBinanceIndividualTrades = "BINANCE_INDIVIDUAL_TRADES"
+	OpCommandBitgetIndividualTrades  = "BITGET_INDIVIDUAL_TRADES"
 )
 
 // BinanceAPIKey returns the Binance API key from environment, if set.

@@ -327,6 +327,7 @@ export interface ApiKeyManagerHandle {
 
 export interface ApiKeySaveResult {
   exchange: Exchange
+  attestationType: "portfolio-growth" | "individual-trades"
   keys: Record<string, string>
 }
 
@@ -339,6 +340,7 @@ function ApiKeyManager({ onValidChange } = {}, ref) {
   const [exchange, setExchange] = useState<Exchange | "">("")
   const [values, setValues] = useState<Record<string, string>>({})
   const [tutorialOpen, setTutorialOpen] = useState(false)
+  const [attestationType, setAttestationType] = useState<"portfolio-growth" | "individual-trades">("portfolio-growth")
 
   const fields = exchange ? EXCHANGE_FIELDS[exchange] : []
   const allValid =
@@ -353,13 +355,14 @@ function ApiKeyManager({ onValidChange } = {}, ref) {
   // Expose save() so the parent's Continue button can trigger it
   useImperativeHandle(ref, () => ({
     save: async () => {
-      if (!allValid || exchange === "") return null
+      if (!allValid || !exchange) return null
       return {
         exchange,
+        attestationType,
         keys: { ...values },
       }
     },
-  }), [allValid, exchange, values])
+  }), [allValid, exchange, attestationType, values])
 
   const handleExchangeChange = useCallback((val: string) => {
     setExchange(val as Exchange)
@@ -407,6 +410,41 @@ function ApiKeyManager({ onValidChange } = {}, ref) {
               </SelectContent>
             </Select>
           </div>
+
+          {/* Attestation type toggle — visible once an exchange is selected */}
+          {exchange && (
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Attestation Type
+              </Label>
+              <div className="flex rounded-lg border border-border overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setAttestationType("portfolio-growth")}
+                  className={cn(
+                    "flex-1 py-2 px-3 text-xs font-medium transition-colors",
+                    attestationType === "portfolio-growth"
+                      ? "bg-primary/20 text-primary border-r border-border"
+                      : "text-muted-foreground hover:text-foreground hover:bg-secondary border-r border-border",
+                  )}
+                >
+                  Portfolio Growth
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAttestationType("individual-trades")}
+                  className={cn(
+                    "flex-1 py-2 px-3 text-xs font-medium transition-colors",
+                    attestationType === "individual-trades"
+                      ? "bg-primary/20 text-primary"
+                      : "text-muted-foreground hover:text-foreground hover:bg-secondary",
+                  )}
+                >
+                  Individual Trades
+                </button>
+              </div>
+            </div>
+          )}
 
           {/*
             Fixed-height container prevents layout jump when switching between

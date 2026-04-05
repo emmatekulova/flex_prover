@@ -5,6 +5,8 @@ export interface AttestationSubmitRequest {
   passphrase?: string
   wallet: string
   windowDays?: number
+  attestationType?: "portfolio-growth" | "individual-trades"
+  selectedAssets?: string[]
 }
 
 export interface AttestationResult {
@@ -18,6 +20,29 @@ export interface AttestationResult {
   profitPercent: string
 }
 
+export interface TradePosition {
+  asset: string
+  quantity: string
+  priceUsdt: string
+  valueUsdt: string
+}
+
+export interface IndividualTradesResult {
+  txHash: string
+  attestedWallet: string
+  providedWallet: string
+  positions: TradePosition[]
+  totalUsdt: string
+  fetchedAt: number
+}
+
+export interface PositionsFetchResponse {
+  exchange: string
+  positions: TradePosition[]
+  fetchedAt: number
+}
+
 export interface AttestationApiResponse {
-  result: AttestationResult
+  result?: AttestationResult
+  tradesResult?: IndividualTradesResult
 }

@@ -52,6 +52,8 @@ func Register(f *base.Framework) {
 	f.Handle(OpTypeMarket, OpCommandBinanceUserProfile, handleBinanceUserProfile)
 	f.Handle(OpTypeMarket, OpCommandBinanceProfileGrowth, handleBinanceProfileGrowth)
 	f.Handle(OpTypeMarket, OpCommandBitgetProfileGrowth, handleBitgetProfileGrowth)
+	f.Handle(OpTypeMarket, OpCommandBinanceIndividualTrades, handleBinanceIndividualTrades)
+	f.Handle(OpTypeMarket, OpCommandBitgetIndividualTrades, handleBitgetIndividualTrades)
 }
 
 // ReportState returns a JSON snapshot of the current state.
@@ -1156,4 +1158,358 @@ func fetchBitgetTickers() (map[string]string, error) {
 		prices[t.Symbol] = t.LastPr
 	}
 	return prices, nil
+}
+
+type bitgetMixPosition struct {
+	Symbol           string `json:"symbol"`
+	HoldSide         string `json:"holdSide"`
+	Total            string `json:"total"`
+	MarkPrice        string `json:"markPrice"`
+	MarketPrice      string `json:"marketPrice"`
+	AvgOpenPrice     string `json:"avgOpenPrice"`
+	OpenPriceAvg     string `json:"openPriceAvg"`
+	UnrealizedPL     string `json:"unrealizedPL"`
+	LiquidationPrice string `json:"liquidationPrice"`
+	MarginCoin       string `json:"marginCoin"`
+}
+
+type bitgetMixPositionsResponse struct {
+	Code string              `json:"code"`
+	Data []bitgetMixPosition  `json:"data"`
+}
+
+func fetchBitgetMixPositions(apiKey, secretKey, passphrase string) ([]TradePosition, error) {
+	var positions []TradePosition
+	seen := make(map[string]struct{})
+	var lastErr error
+	hadSuccess := false
+
+	for _, productType := range []string{"USDT-FUTURES", "USDC-FUTURES", "COIN-FUTURES"} {
+		entries, err := fetchBitgetMixPositionEntries(apiKey, secretKey, passphrase, productType)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		hadSuccess = true
+		for _, entry := range entries {
+			position := convertBitgetMixPosition(entry)
+			if position == nil {
+				continue
+			}
+			if _, ok := seen[position.Asset]; ok {
+				continue
+			}
+			seen[position.Asset] = struct{}{}
+			positions = append(positions, *position)
+		}
+	}
+
+	if len(positions) == 0 {
+		if hadSuccess {
+			return []TradePosition{}, nil
+		}
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return []TradePosition{}, nil
+	}
+
+	return positions, nil
+}
+
+func fetchBitgetMixPositionEntries(apiKey, secretKey, passphrase, productType string) ([]bitgetMixPosition, error) {
+	path := "/api/v2/mix/position/all-position?productType=" + url.QueryEscape(productType)
+	timestamp := bitgetTimestamp()
+	sign := signBitgetRequest(secretKey, timestamp, "GET", path, "")
+
+	endpoint := strings.TrimRight(bitgetAPIBaseURL, "/") + path
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("bitget: create mix position request: %w", err)
+	}
+	req.Header.Set("ACCESS-KEY", apiKey)
+	req.Header.Set("ACCESS-SIGN", sign)
+	req.Header.Set("ACCESS-TIMESTAMP", timestamp)
+	req.Header.Set("ACCESS-PASSPHRASE", passphrase)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("bitget: fetch mix positions: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("bitget mix positions returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result bitgetMixPositionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("bitget: decode mix positions: %w", err)
+	}
+	if result.Code != "00000" {
+		return nil, fmt.Errorf("bitget mix positions error code %s", result.Code)
+	}
+	return result.Data, nil
+}
+
+func convertBitgetMixPosition(position bitgetMixPosition) *TradePosition {
+	symbol := strings.ToUpper(strings.TrimSpace(position.Symbol))
+	if symbol == "" {
+		return nil
+	}
+
+	quantity := parseBitgetFloat(position.Total)
+	if quantity.Sign() == 0 {
+		return nil
+	}
+
+	price := firstNonEmpty(position.MarkPrice, position.MarketPrice, position.AvgOpenPrice, position.OpenPriceAvg)
+	priceUSDT := parseBitgetFloat(price)
+	if priceUSDT.Sign() == 0 {
+		priceUSDT = new(big.Float)
+	}
+
+	valueUSDT := new(big.Float).Mul(quantity, priceUSDT)
+	holdSide := strings.ToUpper(strings.TrimSpace(position.HoldSide))
+	assetName := symbol
+	if holdSide != "" {
+		assetName = symbol + "-" + holdSide
+	}
+
+	return &TradePosition{
+		Asset:     assetName,
+		Quantity:  quantity.Text('f', 8),
+		PriceUSDT: priceUSDT.Text('f', 6),
+		ValueUSDT: valueUSDT.Text('f', 2),
+	}
+}
+
+func parseBitgetFloat(input string) *big.Float {
+	value, ok := new(big.Float).SetString(strings.TrimSpace(input))
+	if !ok {
+		return new(big.Float)
+	}
+	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// ── Individual Trades handlers ─────────────────────────────────────────────────
+
+// handleBinanceIndividualTrades fetches the user's current spot holdings from Binance,
+// filters to the selected assets (or all non-zero if none selected), attaches current
+// USDT prices, and returns ABI-encoded (payload, signature) signed by the TEE node.
+func handleBinanceIndividualTrades(msg string) (data *string, status int, err error) {
+	msgBytes, hexErr := base.HexToBytes(msg)
+	if hexErr != nil {
+		return nil, 0, fmt.Errorf("invalid hex in originalMessage: %v", hexErr)
+	}
+
+	var req BinanceIndividualTradesRequest
+	if err := json.Unmarshal(msgBytes, &req); err != nil {
+		return nil, 0, fmt.Errorf("invalid request payload: expected JSON {\"apiKey\":\"...\",\"secretKey\":\"...\",\"wallet\":\"...\"}")
+	}
+
+	req.APIKey = strings.TrimSpace(req.APIKey)
+	req.SecretKey = strings.TrimSpace(req.SecretKey)
+	req.Wallet = strings.TrimSpace(req.Wallet)
+
+	if req.APIKey == "" || req.SecretKey == "" {
+		return nil, 0, fmt.Errorf("apiKey and secretKey are required")
+	}
+	if req.Wallet == "" {
+		return nil, 0, fmt.Errorf("wallet address is required")
+	}
+
+	// Build a set of selected assets for O(1) lookup (empty = include all).
+	selectedSet := make(map[string]struct{}, len(req.SelectedAssets))
+	for _, a := range req.SelectedAssets {
+		selectedSet[strings.ToUpper(strings.TrimSpace(a))] = struct{}{}
+	}
+
+	account, fetchErr := fetchBinanceSpotAccount(req.APIKey, req.SecretKey)
+	if fetchErr != nil {
+		return nil, 0, fetchErr
+	}
+
+	priceMap, priceErr := fetchBinanceAllSpotPrices()
+	if priceErr != nil {
+		return nil, 0, priceErr
+	}
+
+	stablecoins := map[string]struct{}{
+		"USDT": {}, "USDC": {}, "BUSD": {}, "FDUSD": {}, "TUSD": {},
+	}
+
+	var positions []TradePosition
+	totalUSDT := new(big.Float)
+
+	for _, bal := range account.Balances {
+		free, okF := new(big.Float).SetString(bal.Free)
+		locked, okL := new(big.Float).SetString(bal.Locked)
+		if !okF {
+			free = new(big.Float)
+		}
+		if !okL {
+			locked = new(big.Float)
+		}
+		qty := new(big.Float).Add(free, locked)
+		if qty.Sign() == 0 {
+			continue
+		}
+
+		asset := strings.ToUpper(bal.Asset)
+
+		// Apply selection filter.
+		if len(selectedSet) > 0 {
+			if _, ok := selectedSet[asset]; !ok {
+				continue
+			}
+		}
+
+		var priceUSDT *big.Float
+		if _, isStable := stablecoins[asset]; isStable {
+			priceUSDT = big.NewFloat(1)
+		} else {
+			symbol := asset + "USDT"
+			p, ok := priceMap[symbol]
+			if !ok {
+				continue // no USDT pair — skip
+			}
+			priceUSDT = p
+		}
+
+		valueUSDT := new(big.Float).Mul(qty, priceUSDT)
+		totalUSDT.Add(totalUSDT, valueUSDT)
+
+		positions = append(positions, TradePosition{
+			Asset:     asset,
+			Quantity:  qty.Text('f', 8),
+			PriceUSDT: priceUSDT.Text('f', 6),
+			ValueUSDT: valueUSDT.Text('f', 2),
+		})
+	}
+
+	payloadObj := BinanceIndividualTradesPayload{
+		Source:    "binance-individual-trades",
+		Wallet:    req.Wallet,
+		Positions: positions,
+		TotalUSDT: totalUSDT.Text('f', 2),
+		FetchedAt: time.Now().Unix(),
+		Version:   Version,
+	}
+
+	payloadBytes, marshalErr := json.Marshal(payloadObj)
+	if marshalErr != nil {
+		return nil, 0, fmt.Errorf("failed to marshal individual trades payload: %v", marshalErr)
+	}
+
+	signature, signErr := signViaNode(payloadBytes)
+	if signErr != nil {
+		return nil, 0, fmt.Errorf("signing failed: %v", signErr)
+	}
+
+	encoded, abiErr := abiEncodeTwo(payloadBytes, signature)
+	if abiErr != nil {
+		return nil, 0, fmt.Errorf("ABI encoding failed: %v", abiErr)
+	}
+
+	dataHex := base.BytesToHex(encoded)
+	return &dataHex, 1, nil
+}
+
+// handleBitgetIndividualTrades fetches the user's current futures positions from Bitget,
+// filters to the selected positions (or all non-zero if none selected), attaches a best-effort
+// USDT price, and returns ABI-encoded (payload, signature) signed by the TEE node.
+func handleBitgetIndividualTrades(msg string) (data *string, status int, err error) {
+	msgBytes, hexErr := base.HexToBytes(msg)
+	if hexErr != nil {
+		return nil, 0, fmt.Errorf("invalid hex in originalMessage: %v", hexErr)
+	}
+
+	var req BitgetIndividualTradesRequest
+	if err := json.Unmarshal(msgBytes, &req); err != nil {
+		return nil, 0, fmt.Errorf("invalid request payload: expected JSON {\"apiKey\":\"...\",\"secretKey\":\"...\",\"passphrase\":\"...\",\"wallet\":\"...\"}")
+	}
+
+	req.APIKey = strings.TrimSpace(req.APIKey)
+	req.SecretKey = strings.TrimSpace(req.SecretKey)
+	req.Passphrase = strings.TrimSpace(req.Passphrase)
+	req.Wallet = strings.TrimSpace(req.Wallet)
+
+	if req.APIKey == "" || req.SecretKey == "" || req.Passphrase == "" {
+		return nil, 0, fmt.Errorf("apiKey, secretKey, and passphrase are required")
+	}
+	if req.Wallet == "" {
+		return nil, 0, fmt.Errorf("wallet address is required")
+	}
+
+	// Build a set of selected assets for O(1) lookup (empty = include all).
+	selectedSet := make(map[string]struct{}, len(req.SelectedAssets))
+	for _, a := range req.SelectedAssets {
+		selectedSet[strings.ToUpper(strings.TrimSpace(a))] = struct{}{}
+	}
+
+	assets, fetchErr := fetchBitgetMixPositions(req.APIKey, req.SecretKey, req.Passphrase)
+	if fetchErr != nil {
+		return nil, 0, fetchErr
+	}
+
+	var positions []TradePosition
+	totalUSDT := new(big.Float)
+
+	for _, asset := range assets {
+		// Apply selection filter.
+		if len(selectedSet) > 0 {
+			if _, ok := selectedSet[asset.Asset]; !ok {
+				continue
+			}
+		}
+
+		positions = append(positions, asset)
+		qty, _ := new(big.Float).SetString(asset.Quantity)
+		val, _ := new(big.Float).SetString(asset.ValueUSDT)
+		if qty != nil {
+			_ = qty
+		}
+		if val != nil {
+			totalUSDT.Add(totalUSDT, val)
+		}
+	}
+
+	payloadObj := BitgetIndividualTradesPayload{
+		Source:    "bitget-individual-trades",
+		Wallet:    req.Wallet,
+		Positions: positions,
+		TotalUSDT: totalUSDT.Text('f', 2),
+		FetchedAt: time.Now().Unix(),
+		Version:   Version,
+	}
+
+	payloadBytes, marshalErr := json.Marshal(payloadObj)
+	if marshalErr != nil {
+		return nil, 0, fmt.Errorf("failed to marshal individual trades payload: %v", marshalErr)
+	}
+
+	signature, signErr := signViaNode(payloadBytes)
+	if signErr != nil {
+		return nil, 0, fmt.Errorf("signing failed: %v", signErr)
+	}
+
+	encoded, abiErr := abiEncodeTwo(payloadBytes, signature)
+	if abiErr != nil {
+		return nil, 0, fmt.Errorf("ABI encoding failed: %v", abiErr)
+	}
+
+	dataHex := base.BytesToHex(encoded)
+	return &dataHex, 1, nil
 }
