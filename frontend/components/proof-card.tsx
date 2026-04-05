@@ -12,15 +12,17 @@ interface ProofCardProps {
   txHash: string
   startDate: string
   endDate: string
+  exchange?: "binance" | "bitget" | string
 }
 
-export function ProofCard({ walletAddress, profitPercent, txHash, startDate, endDate }: ProofCardProps) {
+export function ProofCard({ walletAddress, profitPercent, txHash, startDate, endDate, exchange }: ProofCardProps) {
   const cardRef = useRef<HTMLDivElement>(null)
   const [copiedLink, setCopiedLink] = useState(false)
 
-  const txUrl = `https://flarescan.com/tx/${txHash}`
+  const txUrl = `https://coston2-explorer.flare.network/tx/${txHash}`
   const shortWallet = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
   const profitValue = profitPercent !== "" ? `${profitPercent}%` : "N/A"
+  const exchangeLabel = exchange === "bitget" ? "Bitget" : exchange === "binance" ? "Binance" : "Unknown"
 
   const handleShareToX = () => {
     const text = `Just verified my trading performance on-chain! ${profitValue} PNL proven with @FlexProver on Flare Network. #FlexProver #Flare #DeFi`
@@ -48,76 +50,160 @@ export function ProofCard({ walletAddress, profitPercent, txHash, startDate, end
 
   const handleDownloadPng = async () => {
     if (!cardRef.current) return
-    const html2canvas = (await import("html2canvas")).default
-    const canvas = await html2canvas(cardRef.current, {
-      backgroundColor: "#0a0a0f",
-      scale: 2,
-      useCORS: true,
-    })
-    const link = document.createElement("a")
-    link.download = `proof-${shortWallet}.png`
-    link.href = canvas.toDataURL("image/png")
-    link.click()
+    try {
+      const { toPng } = await import("html-to-image")
+
+      const sourceNode = cardRef.current
+      const exportQr = sourceNode.querySelector("[data-proof-qr]") as HTMLDivElement | null
+      const exportPnlValue = sourceNode.querySelector("[data-proof-pnl-value]") as HTMLParagraphElement | null
+      const exportTeeLabel = sourceNode.querySelector("[data-proof-tee-label]") as HTMLSpanElement | null
+      const previousQrStyles = exportQr
+        ? {
+            width: exportQr.style.width,
+            height: exportQr.style.height,
+            padding: exportQr.style.padding,
+          }
+        : null
+      const previousPnlStyles = exportPnlValue
+        ? {
+            fontSize: exportPnlValue.style.fontSize,
+            lineHeight: exportPnlValue.style.lineHeight,
+          }
+        : null
+      const previousTeeStyles = exportTeeLabel
+        ? {
+            fontSize: exportTeeLabel.style.fontSize,
+            whiteSpace: exportTeeLabel.style.whiteSpace,
+          }
+        : null
+
+      if (exportQr) {
+        exportQr.style.width = "132px"
+        exportQr.style.height = "132px"
+        exportQr.style.padding = "10px"
+      }
+
+      if (exportPnlValue) {
+        exportPnlValue.style.fontSize = "56px"
+        exportPnlValue.style.lineHeight = "1"
+      }
+
+      if (exportTeeLabel) {
+        exportTeeLabel.style.fontSize = "13px"
+        exportTeeLabel.style.whiteSpace = "nowrap"
+      }
+
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+
+      const baseOptions = {
+        backgroundColor: "#0a0a0f",
+        pixelRatio: 3,
+        cacheBust: true,
+      }
+
+      let dataUrl: string
+      try {
+        dataUrl = await toPng(sourceNode, baseOptions)
+      } catch {
+        dataUrl = await toPng(sourceNode, {
+          ...baseOptions,
+          fontEmbedCSS: "",
+        })
+      } finally {
+        if (exportQr && previousQrStyles) {
+          exportQr.style.width = previousQrStyles.width
+          exportQr.style.height = previousQrStyles.height
+          exportQr.style.padding = previousQrStyles.padding
+        }
+        if (exportPnlValue && previousPnlStyles) {
+          exportPnlValue.style.fontSize = previousPnlStyles.fontSize
+          exportPnlValue.style.lineHeight = previousPnlStyles.lineHeight
+        }
+        if (exportTeeLabel && previousTeeStyles) {
+          exportTeeLabel.style.fontSize = previousTeeStyles.fontSize
+          exportTeeLabel.style.whiteSpace = previousTeeStyles.whiteSpace
+        }
+      }
+
+      const link = document.createElement("a")
+      link.download = `proof-${shortWallet}.png`
+      link.href = dataUrl
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } catch (error) {
+      console.error("Failed to download PNG", error)
+      alert("Could not generate PNG right now. Please try again.")
+    }
   }
 
   return (
     <div className="space-y-4">
       {/* The Proof Card — captured for PNG download */}
       <motion.div
-        ref={cardRef}
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.4 }}
         className="relative overflow-hidden rounded-2xl p-[1px] bg-gradient-to-br from-primary/40 via-border to-accent/30"
       >
-        <div className="rounded-2xl bg-[#0a0a0f] p-6 sm:p-8 space-y-6">
+        <div
+          ref={cardRef}
+          className="rounded-2xl bg-[#0a0a0f] p-6 sm:p-8 md:p-10 flex flex-col gap-8 w-full max-w-5xl mx-auto"
+        >
           {/* Header */}
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center">
                 <span className="text-primary font-bold text-sm">FP</span>
               </div>
-              <span className="font-semibold text-sm text-muted-foreground">FlexProver</span>
+              <span className="font-semibold text-lg text-muted-foreground">FlexProver</span>
             </div>
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-accent/10 border border-accent/30">
               <Shield className="w-4 h-4 text-accent" />
-              <span className="text-xs font-medium text-accent">TEE Verified</span>
+              <span data-proof-tee-label className="text-sm font-medium text-accent">TEE Verified</span>
             </div>
           </div>
 
           {/* Wallet */}
           <div>
-            <p className="text-xs text-muted-foreground mb-1">Wallet Address</p>
-            <p className="text-lg sm:text-xl font-bold text-foreground font-mono tracking-tight break-all">
+            <p className="text-sm text-muted-foreground mb-2">Wallet Address</p>
+            <p className="text-xl sm:text-2xl font-bold text-foreground font-mono tracking-tight break-all leading-tight">
               {walletAddress}
             </p>
           </div>
 
           {/* PNL */}
-          <div className="p-4 rounded-xl bg-primary/10 border border-primary/20">
-            <div className="flex items-center gap-2 mb-1">
-              <TrendingUp className="w-4 h-4 text-primary" />
-              <span className="text-xs text-muted-foreground">Verified Trading Performance</span>
+          <div className="p-5 rounded-xl bg-primary/10 border border-primary/25">
+            <div className="flex items-center gap-2 mb-2">
+              <TrendingUp className="w-5 h-5 text-primary" />
+              <span className="text-sm text-muted-foreground">Verified Trading Performance</span>
             </div>
-            <p className="text-4xl font-bold text-primary">{profitValue}</p>
-            <p className="text-xs text-muted-foreground mt-1">
+            <p data-proof-pnl-value className="text-5xl sm:text-6xl font-bold text-primary leading-none">{profitValue}</p>
+            <p className="text-sm text-muted-foreground mt-3">
               {startDate} — {endDate}
+            </p>
+            <p className="text-sm text-muted-foreground mt-1">
+              Source CEX: <span className="text-foreground font-semibold">{exchangeLabel}</span>
             </p>
           </div>
 
           {/* Footer: TX + QR */}
-          <div className="flex items-end justify-between pt-2 border-t border-border/30">
+          <div className="flex items-end justify-between pt-4 border-t border-border/30 gap-4">
             <div className="min-w-0 mr-4">
-              <p className="text-xs text-muted-foreground mb-1">On-Chain Proof</p>
-              <p className="text-xs font-mono text-foreground break-all">{txHash}</p>
+              <p className="text-sm text-muted-foreground mb-2">On-Chain Proof</p>
+              <p className="text-sm font-mono text-foreground break-all leading-relaxed">{txHash}</p>
             </div>
-            <div className="w-16 h-16 shrink-0 rounded-lg bg-white flex items-center justify-center overflow-hidden p-1">
+            <div
+              data-proof-qr
+              className="w-28 h-28 shrink-0 rounded-xl bg-white flex items-center justify-center overflow-hidden p-2 shadow-sm"
+            >
               <QRCodeCanvas
                 value={txUrl}
-                size={52}
+                size={92}
                 bgColor="#ffffff"
                 fgColor="#000000"
-                level="M"
+                level="H"
+                includeMargin
               />
             </div>
           </div>
@@ -167,7 +253,7 @@ export function ProofCard({ walletAddress, profitPercent, txHash, startDate, end
         onClick={() => window.open(txUrl, "_blank")}
       >
         <ExternalLink className="w-4 h-4 mr-2" />
-        View Transaction on Flarescan
+        View Transaction on Coston2 Explorer
       </Button>
     </div>
   )

@@ -17,6 +17,7 @@ import { DocsSheet } from "@/components/docs-sheet"
 import { StepWizard } from "@/components/step-wizard"
 import { Verifier } from "@/components/verifier"
 import { Button } from "@/components/ui/button"
+import { Slider } from "@/components/ui/slider"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,7 +30,7 @@ import { ProofCard } from "@/components/proof-card"
 const steps = [
   { id: 1, title: "Wallet", description: "Connect your wallet" },
   { id: 2, title: "Exchange", description: "Link Binance API" },
-  { id: 3, title: "Trade Part 3", description: "Coming soon" },
+  { id: 3, title: "Settings", description: "Choose data window" },
   { id: 4, title: "Generate", description: "Publish and fetch" },
   { id: 5, title: "Proof", description: "Your proof card" },
 ]
@@ -51,6 +52,7 @@ export default function FlexProver() {
 
   const [apiVerified, setApiVerified] = useState(false)
   const [apiCredentials, setApiCredentials] = useState<ApiKeySaveResult | null>(null)
+  const [windowDays, setWindowDays] = useState(7)
   const apiKeyRef = useRef<ApiKeyManagerHandle>(null)
 
   const [logs, setLogs] = useState<string[]>([])
@@ -136,7 +138,6 @@ export default function FlexProver() {
           apiKey,
           secretKey,
           wallet: walletAddress,
-          windowDays: 7,
         }),
       })
 
@@ -163,6 +164,7 @@ export default function FlexProver() {
 
   const nextStep = async () => {
     setSubmitError(null)
+    if (currentStep >= 5) return
 
     if (currentStep === 2) {
       const saved = await apiKeyRef.current?.save()
@@ -187,7 +189,7 @@ export default function FlexProver() {
 
   const prevStep = () => {
     setSubmitError(null)
-    if (currentStep > 1) setCurrentStep((prev) => prev - 1)
+    if (currentStep > 1 && currentStep < 5) setCurrentStep((prev) => prev - 1)
   }
 
   const resetApp = () => {
@@ -427,11 +429,62 @@ export default function FlexProver() {
                         initial={{ opacity: 0, x: 20 }}
                         animate={{ opacity: 1, x: 0 }}
                         exit={{ opacity: 0, x: -20 }}
-                        className="max-w-xl mx-auto"
+                        className="max-w-xl mx-auto space-y-6"
                       >
-                        <div className="rounded-xl border border-border bg-card p-8 text-center">
-                          <h2 className="text-2xl font-bold text-foreground">Trade Part 3</h2>
-                          <p className="text-muted-foreground mt-3">Coming soon</p>
+                        <div>
+                          <h2 className="text-2xl font-bold text-foreground mb-2">Settings</h2>
+                          <p className="text-muted-foreground">Select the range of days for the transaction data.</p>
+                        </div>
+
+                        <div className="rounded-xl border border-border bg-card p-6 sm:p-8 space-y-6">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm text-muted-foreground">Transaction window</p>
+                            <p className="text-lg font-semibold text-foreground">{windowDays} day{windowDays === 1 ? "" : "s"}</p>
+                          </div>
+
+                          <div className="flex items-center gap-3">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              className="shrink-0"
+                              onClick={() => setWindowDays((prev) => Math.max(1, prev - 1))}
+                              disabled={windowDays <= 1}
+                              aria-label="Decrease days"
+                            >
+                              -
+                            </Button>
+
+                            <Slider
+                              min={1}
+                              max={30}
+                              step={1}
+                              value={[windowDays]}
+                              onValueChange={(value) => setWindowDays(value[0] ?? 7)}
+                              aria-label="Transaction window in days"
+                            />
+
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              className="shrink-0"
+                              onClick={() => setWindowDays((prev) => Math.min(30, prev + 1))}
+                              disabled={windowDays >= 30}
+                              aria-label="Increase days"
+                            >
+                              +
+                            </Button>
+                          </div>
+
+                          <div className="flex justify-between text-xs text-muted-foreground">
+                            <span>1 day</span>
+                            <span>30 days</span>
+                          </div>
+
+                          <p className="text-sm text-muted-foreground">
+                            Default is 7 days. Click Continue to confirm this selection.
+                          </p>
                         </div>
                       </motion.div>
                     )}
@@ -455,8 +508,16 @@ export default function FlexProver() {
                             <p className="font-semibold text-foreground break-all">{walletAddress ?? "-"}</p>
                           </div>
                           <div className="p-4 rounded-xl bg-secondary/50 border border-border">
-                            <p className="text-xs text-muted-foreground mb-1">Binance credentials</p>
+                            <p className="text-xs text-muted-foreground mb-1">
+                              {apiCredentials
+                                ? `${apiCredentials.exchange === "bitget" ? "Bitget" : "Binance"} credentials`
+                                : "Exchange credentials"}
+                            </p>
                             <p className="font-semibold text-foreground">{apiCredentials ? "Ready" : "Not captured yet"}</p>
+                          </div>
+                          <div className="p-4 rounded-xl bg-secondary/50 border border-border">
+                            <p className="text-xs text-muted-foreground mb-1">Transaction data window</p>
+                            <p className="font-semibold text-foreground">{windowDays} day{windowDays === 1 ? "" : "s"}</p>
                           </div>
                         </div>
                       </motion.div>
@@ -481,6 +542,7 @@ export default function FlexProver() {
                           txHash={attestationResult.txHash}
                           startDate={attestationResult.startDate}
                           endDate={attestationResult.endDate}
+                          exchange={apiCredentials?.exchange}
                         />
                       </motion.div>
                     )}
@@ -505,7 +567,11 @@ export default function FlexProver() {
                       )}
                       <Button
                         onClick={nextStep}
-                        disabled={(currentStep === 1 && !walletConnected) || (currentStep === 2 && !apiVerified)}
+                        disabled={
+                          (currentStep === 1 && !walletConnected) ||
+                          (currentStep === 2 && !apiVerified) ||
+                          (currentStep === 3 && (windowDays < 1 || windowDays > 30))
+                        }
                         className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90"
                       >
                         {currentStep === 4 ? "Publish Attestation" : "Continue"}
