@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,8 +26,9 @@ var (
 	signPort   string
 	httpClient = http.DefaultClient
 
-	binanceAPIBaseURL = BinanceSpotAPIBaseURL()
+	binanceAPIBaseURL        = BinanceSpotAPIBaseURL()
 	binanceFuturesAPIBaseURL = BinanceFuturesAPIBaseURL()
+	bitgetAPIBaseURL         = BitgetAPIBaseURL()
 	lastBinanceSymbol string
 	lastBinancePrice  string
 	lastBinanceAt     int64
@@ -49,6 +51,7 @@ func Register(f *base.Framework) {
 	f.Handle(OpTypeMarket, OpCommandBinanceAccountSummary, handleBinanceAccountSummary)
 	f.Handle(OpTypeMarket, OpCommandBinanceUserProfile, handleBinanceUserProfile)
 	f.Handle(OpTypeMarket, OpCommandBinanceProfileGrowth, handleBinanceProfileGrowth)
+	f.Handle(OpTypeMarket, OpCommandBitgetProfileGrowth, handleBitgetProfileGrowth)
 }
 
 // ReportState returns a JSON snapshot of the current state.
@@ -893,4 +896,264 @@ func fetchBinanceAccountSnapshot(apiKey, apiSecret string, limit int) ([]Binance
 // msEpochToDate converts a millisecond-epoch timestamp to a "YYYY-MM-DD" string (UTC).
 func msEpochToDate(ms int64) string {
 	return time.UnixMilli(ms).UTC().Format("2006-01-02")
+}
+
+// ── Bitget handlers ───────────────────────────────────────────────────────────
+
+// handleBitgetProfileGrowth fetches the current Bitget spot portfolio value,
+// attests it, and returns ABI-encoded (payload, signature) signed by the TEE node.
+// Bitget has no daily snapshot API, so GrowthPercent is always "0.00".
+func handleBitgetProfileGrowth(msg string) (data *string, status int, err error) {
+	msgBytes, hexErr := base.HexToBytes(msg)
+	if hexErr != nil {
+		return nil, 0, fmt.Errorf("invalid hex in originalMessage: %v", hexErr)
+	}
+
+	var req BitgetProfileGrowthRequest
+	if err := json.Unmarshal(msgBytes, &req); err != nil {
+		return nil, 0, fmt.Errorf("invalid request payload: expected JSON {\"apiKey\":\"...\",\"secretKey\":\"...\",\"passphrase\":\"...\",\"wallet\":\"...\"}")
+	}
+
+	req.APIKey = strings.TrimSpace(req.APIKey)
+	req.SecretKey = strings.TrimSpace(req.SecretKey)
+	req.Passphrase = strings.TrimSpace(req.Passphrase)
+	req.Wallet = strings.TrimSpace(req.Wallet)
+
+	if req.APIKey == "" || req.SecretKey == "" || req.Passphrase == "" {
+		return nil, 0, fmt.Errorf("apiKey, secretKey, and passphrase are required")
+	}
+	if req.Wallet == "" {
+		return nil, 0, fmt.Errorf("wallet address is required")
+	}
+
+	assets, fetchErr := fetchBitgetSpotAssets(req.APIKey, req.SecretKey, req.Passphrase)
+	if fetchErr != nil {
+		return nil, 0, fetchErr
+	}
+
+	prices, priceErr := fetchBitgetTickers()
+	if priceErr != nil {
+		return nil, 0, priceErr
+	}
+
+	totalUSDT := new(big.Float)
+
+	// Sum spot holdings
+	for _, asset := range assets {
+		available, okA := new(big.Float).SetString(asset.Available)
+		frozen, okF := new(big.Float).SetString(asset.Frozen)
+		locked, okL := new(big.Float).SetString(asset.Locked)
+		if !okA {
+			available = new(big.Float)
+		}
+		if !okF {
+			frozen = new(big.Float)
+		}
+		if !okL {
+			locked = new(big.Float)
+		}
+		qty := new(big.Float).Add(new(big.Float).Add(available, frozen), locked)
+
+		coin := strings.ToUpper(asset.CoinName)
+		if coin == "USDT" || coin == "USDC" || coin == "BUSD" || coin == "TUSD" || coin == "DAI" {
+			totalUSDT.Add(totalUSDT, qty)
+			continue
+		}
+		symbol := coin + "USDT"
+		if price, ok := prices[symbol]; ok {
+			priceF, okP := new(big.Float).SetString(price)
+			if okP {
+				totalUSDT.Add(totalUSDT, new(big.Float).Mul(qty, priceF))
+			}
+		}
+	}
+
+	// Sum futures holdings across all product types (errors are non-fatal — best effort)
+	for _, productType := range []string{"USDT-FUTURES", "COIN-FUTURES", "USDC-FUTURES"} {
+		futuresAccounts, fErr := fetchBitgetFuturesAccounts(req.APIKey, req.SecretKey, req.Passphrase, productType)
+		if fErr != nil {
+			continue
+		}
+		for _, acc := range futuresAccounts {
+			if v, ok := new(big.Float).SetString(acc.UsdtEquity); ok {
+				totalUSDT.Add(totalUSDT, v)
+			}
+		}
+	}
+
+	totalUSDTStr := totalUSDT.Text('f', 2)
+	now := time.Now().UTC()
+
+	windowDays := req.WindowDays
+	if windowDays <= 0 {
+		windowDays = 7
+	}
+
+	endDate := now.Format("2006-01-02")
+	startDate := now.AddDate(0, 0, -windowDays).Format("2006-01-02")
+
+	payloadObj := BitgetProfileGrowthPayload{
+		Source:     "bitget-profile-growth",
+		Wallet:     req.Wallet,
+		WindowDays: windowDays,
+		StartSnapshot: BitgetSnapshotPoint{
+			Date:      startDate,
+			TotalUSDT: totalUSDTStr,
+		},
+		EndSnapshot: BitgetSnapshotPoint{
+			Date:      endDate,
+			TotalUSDT: totalUSDTStr,
+		},
+		GrowthPercent: "0.00",
+		TotalUSDT:     totalUSDTStr,
+		FetchedAt:     now.Unix(),
+		Version:       Version,
+	}
+
+	payloadBytes, marshalErr := json.Marshal(payloadObj)
+	if marshalErr != nil {
+		return nil, 0, fmt.Errorf("failed to marshal bitget payload: %v", marshalErr)
+	}
+
+	signature, signErr := signViaNode(payloadBytes)
+	if signErr != nil {
+		return nil, 0, fmt.Errorf("signing failed: %v", signErr)
+	}
+
+	encoded, abiErr := abiEncodeTwo(payloadBytes, signature)
+	if abiErr != nil {
+		return nil, 0, fmt.Errorf("ABI encoding failed: %v", abiErr)
+	}
+
+	dataHex := base.BytesToHex(encoded)
+	return &dataHex, 1, nil
+}
+
+// signBitgetRequest builds the ACCESS-SIGN header value for Bitget API v2.
+// timestamp must be Unix milliseconds as a decimal string.
+// prehash = timestamp + method + requestPath + body
+func signBitgetRequest(secretKey, timestamp, method, path, body string) string {
+	prehash := timestamp + method + path + body
+	mac := hmac.New(sha256.New, []byte(secretKey))
+	mac.Write([]byte(prehash))
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// bitgetTimestamp returns the current time as Unix milliseconds string, as required by Bitget API v2.
+func bitgetTimestamp() string {
+	return fmt.Sprintf("%d", time.Now().UnixMilli())
+}
+
+// fetchBitgetSpotAssets fetches the authenticated user's spot asset list from Bitget.
+func fetchBitgetSpotAssets(apiKey, secretKey, passphrase string) ([]BitgetAsset, error) {
+	const path = "/api/v2/spot/account/assets"
+	timestamp := bitgetTimestamp()
+	sign := signBitgetRequest(secretKey, timestamp, "GET", path, "")
+
+	endpoint := strings.TrimRight(bitgetAPIBaseURL, "/") + path
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("bitget: create request: %w", err)
+	}
+	req.Header.Set("ACCESS-KEY", apiKey)
+	req.Header.Set("ACCESS-SIGN", sign)
+	req.Header.Set("ACCESS-TIMESTAMP", timestamp)
+	req.Header.Set("ACCESS-PASSPHRASE", passphrase)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("bitget: fetch assets: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("bitget assets returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result BitgetAssetsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("bitget: decode assets: %w", err)
+	}
+	if result.Code != "00000" {
+		return nil, fmt.Errorf("bitget assets error code %s", result.Code)
+	}
+	return result.Data, nil
+}
+
+// fetchBitgetFuturesAccounts fetches futures account balances for a given productType
+// (e.g. "USDT-FUTURES", "COIN-FUTURES", "USDC-FUTURES") from Bitget.
+func fetchBitgetFuturesAccounts(apiKey, secretKey, passphrase, productType string) ([]BitgetFuturesAccount, error) {
+	path := "/api/v2/mix/account/accounts?productType=" + productType
+	timestamp := bitgetTimestamp()
+	sign := signBitgetRequest(secretKey, timestamp, "GET", path, "")
+
+	endpoint := strings.TrimRight(bitgetAPIBaseURL, "/") + path
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("bitget futures: create request: %w", err)
+	}
+	req.Header.Set("ACCESS-KEY", apiKey)
+	req.Header.Set("ACCESS-SIGN", sign)
+	req.Header.Set("ACCESS-TIMESTAMP", timestamp)
+	req.Header.Set("ACCESS-PASSPHRASE", passphrase)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("bitget futures: fetch: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("bitget futures returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result BitgetFuturesAccountsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("bitget futures: decode: %w", err)
+	}
+	if result.Code != "00000" {
+		return nil, fmt.Errorf("bitget futures error code %s", result.Code)
+	}
+	return result.Data, nil
+}
+
+// fetchBitgetTickers fetches all spot market tickers from Bitget (public, no auth).
+// Returns a map from symbol (e.g. "BTCUSDT") to last price string.
+func fetchBitgetTickers() (map[string]string, error) {
+	const path = "/api/v2/spot/market/tickers"
+	endpoint := strings.TrimRight(bitgetAPIBaseURL, "/") + path
+
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("bitget: create tickers request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("bitget: fetch tickers: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("bitget tickers returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result BitgetTickersResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("bitget: decode tickers: %w", err)
+	}
+	if result.Code != "00000" {
+		return nil, fmt.Errorf("bitget tickers error code %s", result.Code)
+	}
+
+	prices := make(map[string]string, len(result.Data))
+	for _, t := range result.Data {
+		prices[t.Symbol] = t.LastPr
+	}
+	return prices, nil
 }
