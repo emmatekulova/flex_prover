@@ -1,4 +1,8 @@
-# flex_prover
+<img src="images/cover_flexProver.png" alt="cover">
+<br>
+<br>
+
+# FlexProver - ETH Global Cannes 2025
 
 Trustless proof of trading performance using TEE attestation on Flare.
 
