@@ -147,4 +147,4 @@ This project is licensed under the MIT License.
 
 ## Built On
 
-Developed for **ETH Global Cannes 2025**. Built using the [Flare Network FCC Framework](https://dev.flare.network/fcc/overview).
+Developed for **ETH Global Cannes 2026**. Built using the [Flare Network FCC Framework](https://dev.flare.network/fcc/overview).
