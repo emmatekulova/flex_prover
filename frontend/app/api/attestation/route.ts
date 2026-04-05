@@ -3,7 +3,12 @@ import { promisify } from "node:util"
 import path from "node:path"
 import { NextResponse } from "next/server"
 
-import type { AttestationApiResponse, AttestationSubmitRequest } from "@/lib/attestation"
+import type {
+  AttestationApiResponse,
+  AttestationSubmitRequest,
+  IndividualTradesResult,
+  TradePosition,
+} from "@/lib/attestation"
 
 export const runtime = "nodejs"
 
@@ -19,6 +24,10 @@ interface ReadAttestationOutput {
     startSnapshot?: { date?: string }
     endSnapshot?: { date?: string }
     growthPercent?: string
+    // individual trades fields
+    positions?: TradePosition[]
+    totalUsdt?: string
+    fetchedAt?: number
   }
 }
 
@@ -40,6 +49,7 @@ export async function POST(request: Request) {
     const passphrase = body.passphrase?.trim()
     const wallet = body.wallet?.trim()
     const windowDays = body.windowDays && body.windowDays > 0 ? body.windowDays : 7
+    const attestationType = body.attestationType ?? "portfolio-growth"
 
     if (!apiKey || !secretKey || !wallet) {
       return NextResponse.json({ error: "apiKey, secretKey, and wallet are required" }, { status: 400 })
@@ -48,6 +58,71 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "passphrase is required for Bitget" }, { status: 400 })
     }
 
+    // ── Individual trades flow ──────────────────────────────────────────────────
+    if (attestationType === "individual-trades") {
+      const selectedAssets = (body.selectedAssets ?? []).filter(Boolean)
+      const assetsArg = selectedAssets.join(",")
+
+      let publishArgs: string[]
+      if (exchange === "bitget") {
+        publishArgs = [
+          "run",
+          "./cmd/publish-attestation-individual-trades-bitget",
+          "-apiKey", apiKey,
+          "-secretKey", secretKey,
+          "-passphrase", passphrase!,
+          "-wallet", wallet,
+          "-assets", assetsArg,
+        ]
+      } else {
+        publishArgs = [
+          "run",
+          "./cmd/publish-attestation-individual-trades",
+          "-apiKey", apiKey,
+          "-secretKey", secretKey,
+          "-wallet", wallet,
+          "-assets", assetsArg,
+        ]
+      }
+
+      const publishResult = await execFileAsync("go", publishArgs, {
+        cwd: toolsDir(),
+        timeout: 180000,
+        maxBuffer: 1024 * 1024,
+      })
+
+      const txMatch = publishResult.stdout.match(TX_HASH_REGEX)
+      if (!txMatch) {
+        return NextResponse.json(
+          { error: "publish-attestation completed but tx hash was not found in output" },
+          { status: 502 },
+        )
+      }
+
+      const txHash = txMatch[1]
+      const readResult = await execFileAsync(
+        "go",
+        ["run", "./cmd/read-attestation", "-json", txHash],
+        { cwd: toolsDir(), timeout: 120000, maxBuffer: 1024 * 1024 },
+      )
+
+      const parsed = JSON.parse(readResult.stdout) as ReadAttestationOutput
+      const payload = parsed.payload ?? {}
+
+      const tradesResult: IndividualTradesResult = {
+        txHash,
+        attestedWallet: payload.wallet ?? "",
+        providedWallet: wallet,
+        positions: payload.positions ?? [],
+        totalUsdt: payload.totalUsdt ?? "0",
+        fetchedAt: payload.fetchedAt ?? 0,
+      }
+
+      const response: AttestationApiResponse = { tradesResult }
+      return NextResponse.json(response)
+    }
+
+    // ── Portfolio growth flow (existing) ────────────────────────────────────────
     let publishArgs: string[]
     if (exchange === "bitget") {
       publishArgs = [
