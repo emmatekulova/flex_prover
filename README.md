@@ -103,6 +103,7 @@ Security is rooted in the **Flare FCC Framework**:
 *   [Go 1.23+](https://golang.org/)
 *   [Docker](https://www.docker.com/)
 *   Funded account on **Coston2 Testnet**
+*   
 See the [FCC guide](https://dev.flare.network/fcc/guides/sign-extension) for detailed prerequisites.
 
 
