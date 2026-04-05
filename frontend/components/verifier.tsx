@@ -2,9 +2,52 @@
 
 import { useState, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import { Search, Upload, Shield, CheckCircle2, AlertTriangle, Cpu, FileCheck, User } from "lucide-react"
+import { Search, Upload, Shield, CheckCircle2, AlertTriangle, Cpu, FileCheck, User, Code2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+
+// Mirrors the Go read-attestation tool.
+// log.Data layout: offset_payload(32) | offset_sig(32) | timestamp(32) | len+payload | len+sig
+function readUint256(data: Uint8Array, offset: number): bigint {
+  let value = 0n
+  for (let i = offset; i < offset + 32; i++) value = (value << 8n) | BigInt(data[i])
+  return value
+}
+
+function readBytes(data: Uint8Array, offset: number): Uint8Array {
+  const length = Number(readUint256(data, offset))
+  return data.slice(offset + 32, offset + 32 + length)
+}
+
+function decodeAbiEventData(hex: string): string {
+  const clean = hex.trim().startsWith("0x") ? hex.trim().slice(2) : hex.trim()
+  const pairs = clean.match(/.{1,2}/g)
+  if (!pairs) throw new Error("Invalid hex string")
+  const data = new Uint8Array(pairs.map((b) => parseInt(b, 16)))
+
+  if (data.length < 96) throw new Error("Data too short to be ABI-encoded attestation log")
+
+  const offsetPayload = Number(readUint256(data, 0))
+  const offsetSig = Number(readUint256(data, 32))
+  const timestamp = readUint256(data, 64)
+
+  const payloadBytes = readBytes(data, offsetPayload)
+  const sigBytes = readBytes(data, offsetSig)
+
+  const payloadText = new TextDecoder().decode(payloadBytes)
+  const parsedPayload = JSON.parse(payloadText)
+
+  return JSON.stringify(
+    {
+      timestamp: timestamp.toString(),
+      signature: Array.from(sigBytes).map((b) => b.toString(16).padStart(2, "0")).join(""),
+      payload: parsedPayload,
+    },
+    null,
+    2
+  )
+}
 
 export function Verifier({ initialHash = "" }: { initialHash?: string }) {
   const [proofHash, setProofHash] = useState(initialHash)
@@ -40,6 +83,20 @@ export function Verifier({ initialHash = "" }: { initialHash?: string }) {
     setProofHash("")
     setVerificationState("idle")
     setShowReport(false)
+  }
+
+  const [hexInput, setHexInput] = useState("")
+  const [decodedJson, setDecodedJson] = useState<string | null>(null)
+  const [decodeError, setDecodeError] = useState<string | null>(null)
+
+  const handleDecode = () => {
+    setDecodeError(null)
+    setDecodedJson(null)
+    try {
+      setDecodedJson(decodeAbiEventData(hexInput))
+    } catch {
+      setDecodeError("Could not decode — make sure it's valid hex-encoded JSON.")
+    }
   }
 
   return (
@@ -201,6 +258,36 @@ export function Verifier({ initialHash = "" }: { initialHash?: string }) {
           </motion.div>
         )}
       </AnimatePresence>
+      {/* Hex Decoder */}
+      <div className="pt-6 border-t border-border space-y-4">
+        <div className="flex items-center gap-2">
+          <Code2 className="w-4 h-4 text-muted-foreground" />
+          <h3 className="text-sm font-semibold text-foreground">Decode Attestation Data</h3>
+        </div>
+        <p className="text-xs text-muted-foreground">Paste the raw ABI-encoded <code className="font-mono">log.Data</code> hex from the chain to inspect the attestation payload.</p>
+        <Textarea
+          placeholder="0x7b2261..."
+          value={hexInput}
+          onChange={(e) => setHexInput(e.target.value)}
+          className="font-mono text-xs bg-secondary border-border text-foreground placeholder:text-muted-foreground min-h-28 resize-y"
+        />
+        <Button
+          onClick={handleDecode}
+          disabled={!hexInput.trim()}
+          variant="outline"
+          className="w-full border-border text-foreground hover:bg-secondary"
+        >
+          Decode
+        </Button>
+        {decodeError && (
+          <p className="text-xs text-destructive">{decodeError}</p>
+        )}
+        {decodedJson && (
+          <pre className="text-xs text-foreground bg-secondary/50 border border-border rounded-xl p-4 overflow-x-auto whitespace-pre-wrap break-all">
+            {decodedJson}
+          </pre>
+        )}
+      </div>
     </div>
   )
 }
