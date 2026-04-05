@@ -91,6 +91,13 @@ Security is rooted in the **Flare FCC Framework**:
 2. **Open Source Auditor**: The `fce-sign/go` handler code is open for inspection to confirm it only extracts the requested metrics.
 3. **Data Sovereignty**: Credentials never leave the enclave's encrypted memory and are never persisted.
 
+### Hedera Token Service (HTS) Implementation
+
+| HTS Feature | When | For What |
+|---|---|---|
+| **TokenMintTransaction** | When a user submits a verified Binance proof. | Mints **1 WHALE** token to the treasury account. |
+| **TransferTransaction** | Immediately after the minting is successful. | Sends **1 WHALE** from the treasury to the user's Hedera account. |
+| **FUNGIBLE_COMMON Token** | Created once at deployment time. | The official **WHALE** badge token itself (`0.0.8515448`). |
 
 ---
 
