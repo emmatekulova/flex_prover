@@ -14,6 +14,7 @@ contract/cache/
 # Environment files (contain secrets)
 .env
 config/proxy/extension_proxy.toml
+.env.whale
 
 # Build output
 out/
