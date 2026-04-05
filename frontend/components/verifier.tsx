@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Search, Upload, Shield, CheckCircle2, AlertTriangle, Cpu, FileCheck, User } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -10,6 +10,11 @@ export function Verifier({ initialHash = "" }: { initialHash?: string }) {
   const [proofHash, setProofHash] = useState(initialHash)
   const [verificationState, setVerificationState] = useState<"idle" | "verifying" | "verified" | "mismatch">("idle")
   const [showReport, setShowReport] = useState(false)
+  const [reportDate, setReportDate] = useState<string>("")
+
+  useEffect(() => {
+    if (showReport) setReportDate(new Date().toLocaleDateString())
+  }, [showReport])
 
   const handleVerify = async () => {
     if (!proofHash.trim()) return
@@ -112,7 +117,7 @@ export function Verifier({ initialHash = "" }: { initialHash?: string }) {
               <div className="flex items-center justify-between">
                 <h3 className="font-semibold text-foreground">TEE Attestation Report</h3>
                 <span className="text-xs text-muted-foreground">
-                  {new Date().toLocaleDateString()}
+                  {reportDate}
                 </span>
               </div>
 

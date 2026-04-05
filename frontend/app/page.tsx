@@ -27,6 +27,7 @@ import {
 import type { AttestationApiResponse, AttestationResult, IndividualTradesResult, PositionsFetchResponse, TradePosition } from "@/lib/attestation"
 import { ProofCard } from "@/components/proof-card"
 import { TradesProofCard } from "@/components/trades-proof-card"
+import { WhalePage } from "@/components/whale-page"
 
 const steps = [
   { id: 1, title: "Wallet", description: "Connect your wallet" },
@@ -37,7 +38,7 @@ const steps = [
 ]
 
 type AppState = "landing" | "wizard" | "calculating"
-type Tab = "create" | "verify"
+type Tab = "create" | "verify" | "whale"
 
 export default function FlexProver() {
   const [appState, setAppState] = useState<AppState>("landing")
@@ -301,6 +302,16 @@ export default function FlexProver() {
               }`}
             >
               Verify
+            </button>
+            <button
+              onClick={() => setActiveTab("whale")}
+              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                activeTab === "whale"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Whale Group
             </button>
           </div>
         )}
@@ -758,8 +769,14 @@ export default function FlexProver() {
                     </div>
                   )}
                 </div>
+              ) : activeTab === "verify" ? (
+                <div className="max-w-lg mx-auto py-8">
+                  <Verifier />
+                </div>
               ) : (
-                <Verifier />
+                <div className="max-w-lg mx-auto py-8">
+                  <WhalePage walletAddress={walletAddress} onNavigateToCreate={() => setActiveTab("create")} />
+                </div>
               )}
             </div>
           </motion.div>

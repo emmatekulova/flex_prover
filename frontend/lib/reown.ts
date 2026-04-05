@@ -9,6 +9,73 @@ import { createSiweMessage } from 'viem/siwe'
 
 const projectId = process.env.NEXT_PUBLIC_REOWN_PROJECT_ID!
 
+const STALE_WC_RECOVERY_FLAG = 'flexprover:wc-stale-recovered'
+
+function getErrorMessage(reason: unknown): string {
+  if (typeof reason === 'string') return reason
+  if (reason && typeof reason === 'object' && 'message' in reason) {
+    const msg = (reason as { message?: unknown }).message
+    if (typeof msg === 'string') return msg
+  }
+  return ''
+}
+
+function isStaleWalletConnectTopicError(message: string): boolean {
+  const normalized = message.toLowerCase()
+  return normalized.includes('no matching key') && normalized.includes("session topic doesn't exist")
+}
+
+function clearWalletConnectCache(): void {
+  if (typeof window === 'undefined') return
+
+  try {
+    const keysToRemove: string[] = []
+    for (let i = 0; i < window.localStorage.length; i += 1) {
+      const key = window.localStorage.key(i)
+      if (!key) continue
+      if (key.startsWith('wc@') || key.toLowerCase().includes('walletconnect')) {
+        keysToRemove.push(key)
+      }
+    }
+    keysToRemove.forEach((key) => window.localStorage.removeItem(key))
+  } catch {
+    // noop
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('unhandledrejection', (event) => {
+    const message = getErrorMessage(event.reason)
+    if (!isStaleWalletConnectTopicError(message)) return
+
+    const alreadyRecovered = window.sessionStorage.getItem(STALE_WC_RECOVERY_FLAG) === '1'
+    if (alreadyRecovered) return
+
+    clearWalletConnectCache()
+    window.sessionStorage.setItem(STALE_WC_RECOVERY_FLAG, '1')
+    window.location.reload()
+  })
+}
+
+// Hedera Testnet EVM — needed for HTS system contract calls (token association)
+export const hederaTestnet = defineChain({
+  id: 296,
+  name: 'Hedera Testnet',
+  nativeCurrency: { name: 'HBAR', symbol: 'HBAR', decimals: 8 },
+  rpcUrls: {
+    default: { http: ['https://testnet.hashio.io/api'] },
+  },
+  blockExplorers: {
+    default: { name: 'HashScan', url: 'https://hashscan.io/testnet' },
+  },
+})
+
+const hederaTestnetNetwork: AppKitNetwork = {
+  ...hederaTestnet,
+  caipNetworkId: 'eip155:296' as const,
+  chainNamespace: 'eip155' as const,
+}
+
 // Flare Mainnet — not in wagmi/AppKit's built-in network list
 export const flare = defineChain({
   id: 14,
@@ -29,9 +96,9 @@ const flareNetwork: AppKitNetwork = {
   chainNamespace: 'eip155' as const,
 }
 
-// Wagmi adapter — EVM chains (Flare + Ethereum)
+// Wagmi adapter — EVM chains (Flare + Ethereum + Hedera Testnet)
 const wagmiAdapter = new WagmiAdapter({
-  networks: [flareNetwork, mainnet],
+  networks: [flareNetwork, mainnet, hederaTestnetNetwork],
   projectId,
   ssr: true,
 })
@@ -200,7 +267,7 @@ declare global {
 if (!globalThis.__flexProverAppKitInitialized__) {
   createAppKit({
     adapters: [wagmiAdapter, solanaAdapter],
-    networks: [flareNetwork, mainnet, solana],
+    networks: [flareNetwork, mainnet, hederaTestnetNetwork, solana],
     defaultNetwork: flareNetwork,
     projectId,
     siwx,
