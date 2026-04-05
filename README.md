@@ -1,27 +1,49 @@
-<img src="images/cover_flexProver.png" alt="cover">
-<br>
-<br>
+<p align="center">
+  <img src="images/cover_flexProver.png" alt="FlexProver Cover" width="800">
+</p>
 
-# FlexProver - ETH Global Cannes 2025
+# Flex Prover
 
-Trustless proof of trading performance using TEE attestation on Flare.
+### Trustless, Verifiable Trading Performance via Flare Confidential Compute (FCC)
 
-## Problem
+Flex Prover is a decentralized platform that enables traders to generate cryptographically verifiable proofs of their trading performance without compromising their security or privacy. By leveraging Trusted Execution Environments (TEEs) on the Flare Network, Flex Prover ensures that trading data is fetched directly from exchanges (Binance, Bitget) and attested on-chain in a tamper-proof manner.
 
-Traders are seeking to showcase their performance to the public or potential employers and face a common issue: the lack of a verifiable, trustless standard for sharing authenticated trades.
+---
 
-The current options all fail in the same ways:
+## The Problem
 
-- **Sharing read-only API keys** gives the other party access to your entire account: every position, every balance, full order history, linked addresses.
-- **Screenshots** prove nothing. Any number on a screenshot can be edited in thirty seconds.
-- **Self-reported stats** are the same problem with more steps. A spreadsheet you filled in is not a proof, it is a claim.
-- **Third-party trackers** require you to permanently connect your exchange account to an external service, which then owns that relationship indefinitely.
+Traders who wish to showcase their performance to investors, employers, or the public currently face four major hurdles:
+1. **Security Risks**: Sharing "read-only" API keys exposes entire account histories and balances.
+2. **Fragile Trust**: Screenshots are trivial to manipulate using basic browser inspection tools.
+3. **Lack of Standard**: Self-reported spreadsheets offer no proof of origin.
+4. **Third-Party Dependency**: Connecting accounts to centralized trackers often leads to data harvesting and privacy loss.
 
-## Solution 
+## The Flex Prover Solution
 
-Flex Prover uses a **Trusted Execution Environment (TEE)** on Flare's Confidential Compute (FCC) framework to fetch specific trading data from Binance and attest it on-chain. The TEE guarantees that the data was genuinely retrieved from Binance's API and was not tampered with — no trust in the prover required.
+Flex Prover uses **Flare's Confidential Compute (FCC)** framework to move the trust from individuals to hardware-secured enclaves.
 
-You choose exactly what to share. Nothing more.
+- **Selective Disclosure**: Choose exactly what to share (e.g., 30-day PnL % or specific holdings) and nothing more.
+- **Hardware-Level Security**: API credentials are encrypted via ECIES and only decrypted inside the TEE; they are never visible to Flex Prover operators or the blockchain.
+- **Immutable Attestation**: Every "flex" is signed by the TEE's unique hardware key and stored on the Flare blockchain for anyone to verify.
+
+---
+
+## Architecture & Logic
+
+### System Components
+
+1.  **TEE Enclave (`fce-sign/go`)**: A secure Go-based backend running inside an FCC-compatible enclave. It handles:
+    *   ECIES decryption of exchange credentials.
+    *   Secure API communication with Binance and Bitget.
+    *   Calculation of performance metrics (Growth %, PnL, Asset Valuation).
+    *   Signing of the resulting attestation payload using a hardware-protected key.
+2.  **Smart Contracts (`fce-sign/contract`)**:
+    *   `InstructionSender.sol`: Orchestrates the flow between users and TEE machines.
+    *   `BinanceAttestationStore.sol`: A permanent on-chain registry for verified proofs.
+3.  **Frontend (`frontend`)**: A Next.js 16 application for:
+    *   Secure wallet connection (via Reown/AppKit).
+    *   Step-by-step wizard for credential encryption and proof generation.
+    *   Visual "Proof Card" generation and verification tools.
 
 ### UML
 <img width="1253" height="611" alt="UML_diag" src="https://github.com/user-attachments/assets/1288ffe1-c5ea-4091-850c-c6844e669f9f" />
@@ -54,70 +76,74 @@ User                    Flare (on-chain)              TEE Enclave               
 
 ### Trust Model
 
-The security relies on two pillars:
 
-- **TEE attestation** — The hardware (via Flare's FCC framework) cryptographically proves that the code running inside the enclave matches a known, registered version. No one — not even the server operator — can modify what runs inside.
-- **Open-source handler code** — Anyone can inspect the extension source to confirm it genuinely calls Binance's API and doesn't fabricate data. The registered TEE version hash ties the running code to the auditable source.
+Security is rooted in the **Flare FCC Framework**:
+1. **Hardware Integrity**: TEE attestation proves the exact code version running in the enclave.
+2. **Open Source Auditor**: The `fce-sign/go` handler code is open for inspection to confirm it only extracts the requested metrics.
+3. **Data Sovereignty**: Credentials never leave the enclave's encrypted memory and are never persisted.
 
-Together: *"I can see what the code does + the TEE proves that exact code ran = I trust the output."*
 
-## Setup and run
+---
 
-### frontend
+## Features
 
-Requires Docker, Foundry, and a funded Coston2 wallet. See the [FCC guide](https://dev.flare.network/fcc/guides/sign-extension) for detailed prerequisites.
+*   **Multi-Exchange Support**: Full integration for **Binance** (Spot & Futures) and **Bitget** (Spot & Futures).
+*   **Performance Metrics**:
+    *   **Portfolio Growth**: 7-day or 30-day BTC/USDT denominated growth.
+    *   **Individual Trades**: Attest specific open positions and their current value.
+    *   **Account Summary**: Proof of account type, permissions, and total estimated value.
+*   **On-Chain Verification**: Simple `ecrecover` logic in Solidity allows any third party to verify the TEE signature.
+
+---
+
+## Setup & Development
+
+### Prerequisites
+*   [Foundry](https://book.getfoundry.sh/) (Forge/Cast)
+*   [Go 1.23+](https://golang.org/)
+*   [Docker](https://www.docker.com/)
+*   Funded account on **Coston2 Testnet**
+See the [FCC guide](https://dev.flare.network/fcc/guides/sign-extension) for detailed prerequisites.
+
+
+### 1. Cloudflare Tunnel
+In your terminal, run the following commands to install and start the tunnel:
 
 ```bash
-# 1. Configure
-cp .env.example .env
-cp config/proxy/extension_proxy.toml.example config/proxy/extension_proxy.toml
-# Edit .env with your private key and settings
-
-# 2. Deploy contract
-cd <language>/tools
-# run deploy-contract command for your language
-
-# 3. Register extension
-# run register-extension command
-
-# 4. Start the stack
-docker compose build && docker compose up -d
-
-# 5. Expose via tunnel
+sudo pacman -S cloudflared
 cloudflared tunnel --url http://localhost:6676
+```
+Leave this process running. Copy the generated URL from the output and add it to your .env file.
 
-# 6. Register TEE version + machine
-# run allow-tee-version and register-tee commands
+### 2. Docker
 
-# 7. Test
-# run run-test command
+Open a new terminal at the project root and execute:
+```bash
+docker compose build
+docker compose up
+```
+Leave this process running.
+
+### 3. Frontend
+
+Open a new terminal, navigate to the flex../frontend directory, and run:
+```bash
+npm install
+npm run dev
 ```
 
-## Status
+### 4. Backend
 
-Early development — built on Flare's FCC testnet (Coston2). The FCC framework is still under active development by Flare.
+Open a new terminal, navigate to the flex../backend directory, and run:
+```bash
+go run .
+```
+
 
 ## License
 
-MIT
-
-## Quick start
-
-1. Go to frontend:
-	- `cd frontend`
-
-2. Install dependencies:
-	- `npm install`
-
-3. Run development server:
-	- `npm run dev`
-
-## LAN dev access (optional)
-
-If you test from another device on your local network, add your local IP to `allowedDevOrigins` in [frontend/next.config.mjs](frontend/next.config.mjs):
-
-- `allowedDevOrigins: ['192.168.x.x']`
+This project is licensed under the MIT License.
 
 ## Built On
 
-Adapted from here: https://dev.flare.network/fcc/guides/sign-extension#step-5-add-tee-version
+Developed for **ETH Global Cannes 2025**. Built using the [Flare Network FCC Framework](https://dev.flare.network/fcc/overview).
