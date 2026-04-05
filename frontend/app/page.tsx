@@ -5,12 +5,9 @@ import { AnimatePresence, motion } from "framer-motion"
 import {
   ArrowRight,
   CheckCircle2,
-  Copy,
   FileText,
-  Link2,
   MoreVertical,
   Shield,
-  Sparkles,
   Terminal,
   Wallet,
 } from "lucide-react"
@@ -20,6 +17,7 @@ import { DocsSheet } from "@/components/docs-sheet"
 import { StepWizard } from "@/components/step-wizard"
 import { Verifier } from "@/components/verifier"
 import { Button } from "@/components/ui/button"
+import { Slider } from "@/components/ui/slider"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,15 +25,17 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import type { AttestationApiResponse, AttestationResult } from "@/lib/attestation"
+import { ProofCard } from "@/components/proof-card"
 
 const steps = [
   { id: 1, title: "Wallet", description: "Connect your wallet" },
   { id: 2, title: "Exchange", description: "Link Binance API" },
-  { id: 3, title: "Trade Part 3", description: "Coming soon" },
+  { id: 3, title: "Settings", description: "Choose data window" },
   { id: 4, title: "Generate", description: "Publish and fetch" },
+  { id: 5, title: "Proof", description: "Your proof card" },
 ]
 
-type AppState = "landing" | "wizard" | "calculating" | "celebration"
+type AppState = "landing" | "wizard" | "calculating"
 type Tab = "create" | "verify"
 
 export default function FlexProver() {
@@ -52,12 +52,12 @@ export default function FlexProver() {
 
   const [apiVerified, setApiVerified] = useState(false)
   const [apiCredentials, setApiCredentials] = useState<ApiKeySaveResult | null>(null)
+  const [windowDays, setWindowDays] = useState(7)
   const apiKeyRef = useRef<ApiKeyManagerHandle>(null)
 
   const [logs, setLogs] = useState<string[]>([])
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [attestationResult, setAttestationResult] = useState<AttestationResult | null>(null)
-  const [copiedTx, setCopiedTx] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -112,14 +112,21 @@ export default function FlexProver() {
 
   const runAttestationFlow = async () => {
     if (!walletAddress || !apiCredentials) {
-      setSubmitError("Wallet and Binance API credentials are required.")
+      setSubmitError("Wallet and exchange API credentials are required.")
       return
     }
 
+    const exchange = apiCredentials.exchange
     const apiKey = apiCredentials.keys.apiKey?.trim() ?? ""
     const secretKey = apiCredentials.keys.secretKey?.trim() ?? ""
+    const passphrase = apiCredentials.keys.passphrase?.trim()
+
     if (!apiKey || !secretKey) {
-      setSubmitError("Both Binance API key and secret key are required.")
+      setSubmitError("API key and secret key are required.")
+      return
+    }
+    if (exchange === "bitget" && !passphrase) {
+      setSubmitError("Passphrase is required for Bitget.")
       return
     }
 
@@ -129,16 +136,17 @@ export default function FlexProver() {
 
     try {
       await addLog("Preparing attestation request...")
-      await addLog("Sending Binance credentials + wallet to backend...")
+      await addLog(`Sending ${exchange} credentials + wallet to backend...`)
 
       const res = await fetch("/api/attestation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          exchange,
           apiKey,
           secretKey,
+          ...(passphrase ? { passphrase } : {}),
           wallet: walletAddress,
-          windowDays: 7,
         }),
       })
 
@@ -153,7 +161,8 @@ export default function FlexProver() {
       await addLog("Attestation fetched successfully.")
 
       setAttestationResult(data.result)
-      setAppState("celebration")
+      setAppState("wizard")
+      setCurrentStep(5)
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error"
       setSubmitError(message)
@@ -164,15 +173,12 @@ export default function FlexProver() {
 
   const nextStep = async () => {
     setSubmitError(null)
+    if (currentStep >= 5) return
 
     if (currentStep === 2) {
       const saved = await apiKeyRef.current?.save()
       if (!saved) {
         setSubmitError("Please provide valid exchange credentials.")
-        return
-      }
-      if (saved.exchange !== "binance") {
-        setSubmitError("Only Binance is supported in this flow.")
         return
       }
       setApiCredentials(saved)
@@ -188,7 +194,7 @@ export default function FlexProver() {
 
   const prevStep = () => {
     setSubmitError(null)
-    if (currentStep > 1) setCurrentStep((prev) => prev - 1)
+    if (currentStep > 1 && currentStep < 5) setCurrentStep((prev) => prev - 1)
   }
 
   const resetApp = () => {
@@ -200,26 +206,6 @@ export default function FlexProver() {
     setSubmitError(null)
     setLogs([])
     setLogoRevealed(false)
-  }
-
-  const copyTxHash = async () => {
-    if (!attestationResult?.txHash) return
-
-    try {
-      await navigator.clipboard.writeText(attestationResult.txHash)
-    } catch {
-      const el = document.createElement("textarea")
-      el.value = attestationResult.txHash
-      el.style.position = "fixed"
-      el.style.opacity = "0"
-      document.body.appendChild(el)
-      el.select()
-      document.execCommand("copy")
-      document.body.removeChild(el)
-    }
-
-    setCopiedTx(true)
-    setTimeout(() => setCopiedTx(false), 1500)
   }
 
   const Header = ({ showTabs = false }: { showTabs?: boolean }) => (
@@ -435,7 +421,7 @@ export default function FlexProver() {
                       >
                         <div>
                           <h2 className="text-2xl font-bold text-foreground mb-2">Link Your Exchange Account</h2>
-                          <p className="text-muted-foreground">Provide your Binance read-only API credentials.</p>
+                          <p className="text-muted-foreground">Provide your exchange read-only API credentials.</p>
                         </div>
 
                         <ApiKeyManager ref={apiKeyRef} onValidChange={setApiVerified} />
@@ -448,11 +434,62 @@ export default function FlexProver() {
                         initial={{ opacity: 0, x: 20 }}
                         animate={{ opacity: 1, x: 0 }}
                         exit={{ opacity: 0, x: -20 }}
-                        className="max-w-xl mx-auto"
+                        className="max-w-xl mx-auto space-y-6"
                       >
-                        <div className="rounded-xl border border-border bg-card p-8 text-center">
-                          <h2 className="text-2xl font-bold text-foreground">Trade Part 3</h2>
-                          <p className="text-muted-foreground mt-3">Coming soon</p>
+                        <div>
+                          <h2 className="text-2xl font-bold text-foreground mb-2">Settings</h2>
+                          <p className="text-muted-foreground">Select the range of days for the transaction data.</p>
+                        </div>
+
+                        <div className="rounded-xl border border-border bg-card p-6 sm:p-8 space-y-6">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm text-muted-foreground">Transaction window</p>
+                            <p className="text-lg font-semibold text-foreground">{windowDays} day{windowDays === 1 ? "" : "s"}</p>
+                          </div>
+
+                          <div className="flex items-center gap-3">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              className="shrink-0"
+                              onClick={() => setWindowDays((prev) => Math.max(1, prev - 1))}
+                              disabled={windowDays <= 1}
+                              aria-label="Decrease days"
+                            >
+                              -
+                            </Button>
+
+                            <Slider
+                              min={1}
+                              max={30}
+                              step={1}
+                              value={[windowDays]}
+                              onValueChange={(value) => setWindowDays(value[0] ?? 7)}
+                              aria-label="Transaction window in days"
+                            />
+
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              className="shrink-0"
+                              onClick={() => setWindowDays((prev) => Math.min(30, prev + 1))}
+                              disabled={windowDays >= 30}
+                              aria-label="Increase days"
+                            >
+                              +
+                            </Button>
+                          </div>
+
+                          <div className="flex justify-between text-xs text-muted-foreground">
+                            <span>1 day</span>
+                            <span>30 days</span>
+                          </div>
+
+                          <p className="text-sm text-muted-foreground">
+                            Default is 7 days. Click Continue to confirm this selection.
+                          </p>
                         </div>
                       </motion.div>
                     )}
@@ -476,10 +513,38 @@ export default function FlexProver() {
                             <p className="font-semibold text-foreground break-all">{walletAddress ?? "-"}</p>
                           </div>
                           <div className="p-4 rounded-xl bg-secondary/50 border border-border">
-                            <p className="text-xs text-muted-foreground mb-1">Binance credentials</p>
+                            <p className="text-xs text-muted-foreground mb-1">{apiCredentials ? `${apiCredentials.exchange.charAt(0).toUpperCase() + apiCredentials.exchange.slice(1)} credentials` : "Exchange credentials"}</p>
                             <p className="font-semibold text-foreground">{apiCredentials ? "Ready" : "Not captured yet"}</p>
                           </div>
+                          <div className="p-4 rounded-xl bg-secondary/50 border border-border">
+                            <p className="text-xs text-muted-foreground mb-1">Transaction data window</p>
+                            <p className="font-semibold text-foreground">{windowDays} day{windowDays === 1 ? "" : "s"}</p>
+                          </div>
                         </div>
+                      </motion.div>
+                    )}
+
+                    {currentStep === 5 && attestationResult && (
+                      <motion.div
+                        key="step5"
+                        initial={{ opacity: 0, x: 20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: -20 }}
+                        className="max-w-xl mx-auto space-y-6"
+                      >
+                        <div>
+                          <h2 className="text-2xl font-bold text-foreground mb-2">Your Proof is Ready</h2>
+                          <p className="text-muted-foreground">Published on-chain and verified. Share your proof below.</p>
+                        </div>
+
+                        <ProofCard
+                          walletAddress={attestationResult.attestedWallet || attestationResult.providedWallet}
+                          profitPercent={attestationResult.profitPercent}
+                          txHash={attestationResult.txHash}
+                          startDate={attestationResult.startDate}
+                          endDate={attestationResult.endDate}
+                          exchange={apiCredentials?.exchange}
+                        />
                       </motion.div>
                     )}
                   </AnimatePresence>
@@ -490,25 +555,38 @@ export default function FlexProver() {
                     </div>
                   )}
 
-                  <div className="flex gap-3 mt-8 max-w-xl mx-auto">
-                    {currentStep > 1 && (
+                  {currentStep < 5 && (
+                    <div className="flex gap-3 mt-8 max-w-xl mx-auto">
+                      {currentStep > 1 && (
+                        <Button
+                          variant="outline"
+                          onClick={prevStep}
+                          className="flex-1 border-border text-foreground hover:bg-secondary"
+                        >
+                          Back
+                        </Button>
+                      )}
                       <Button
-                        variant="outline"
-                        onClick={prevStep}
-                        className="flex-1 border-border text-foreground hover:bg-secondary"
+                        onClick={nextStep}
+                        disabled={
+                          (currentStep === 1 && !walletConnected) ||
+                          (currentStep === 2 && !apiVerified) ||
+                          (currentStep === 3 && (windowDays < 1 || windowDays > 30))
+                        }
+                        className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90"
                       >
-                        Back
+                        {currentStep === 4 ? "Publish Attestation" : "Continue"}
+                        <ArrowRight className="w-4 h-4 ml-2" />
                       </Button>
-                    )}
-                    <Button
-                      onClick={nextStep}
-                      disabled={(currentStep === 1 && !walletConnected) || (currentStep === 2 && !apiVerified)}
-                      className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90"
-                    >
-                      {currentStep === 4 ? "Publish Attestation" : "Continue"}
-                      <ArrowRight className="w-4 h-4 ml-2" />
-                    </Button>
-                  </div>
+                    </div>
+                  )}
+                  {currentStep === 5 && (
+                    <div className="flex justify-center mt-8">
+                      <Button variant="ghost" onClick={resetApp} className="text-muted-foreground hover:text-foreground">
+                        Create Another Proof
+                      </Button>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <Verifier />
@@ -550,90 +628,6 @@ export default function FlexProver() {
           </motion.div>
         )}
 
-        {appState === "celebration" && attestationResult && (
-          <motion.div
-            key="celebration"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="min-h-screen flex flex-col"
-          >
-            <Header />
-
-            <div className="flex-1 p-6">
-              <div className="max-w-xl mx-auto">
-                <motion.div
-                  initial={{ scale: 0.8, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  transition={{ type: "spring", damping: 10, delay: 0.2 }}
-                  className="text-center mb-8"
-                >
-                  <div className="relative inline-block mb-4">
-                    <div className="w-20 h-20 rounded-full bg-primary/20 flex items-center justify-center">
-                      <Sparkles className="w-10 h-10 text-primary" />
-                    </div>
-                    <div className="absolute -top-1 -right-1 w-8 h-8 rounded-full bg-accent flex items-center justify-center">
-                      <CheckCircle2 className="w-5 h-5 text-accent-foreground" />
-                    </div>
-                  </div>
-                  <h1 className="text-3xl font-bold text-foreground mb-2">Attestation Ready</h1>
-                  <p className="text-muted-foreground">Published on-chain and read back successfully.</p>
-                </motion.div>
-
-                <div className="rounded-xl border border-border bg-card p-6 space-y-4">
-                  <div>
-                    <p className="text-xs text-muted-foreground">Wallet (from attestation)</p>
-                    <p className="text-foreground break-all font-medium">{attestationResult.attestedWallet || "-"}</p>
-                  </div>
-
-                  <div>
-                    <p className="text-xs text-muted-foreground">Provided wallet address</p>
-                    <p className="text-foreground break-all font-medium">{attestationResult.providedWallet || "-"}</p>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <p className="text-xs text-muted-foreground">Start date / timestamp</p>
-                      <p className="text-foreground font-medium">
-                        {attestationResult.startDate || "-"} / {attestationResult.startTimestamp || 0}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">End date / timestamp</p>
-                      <p className="text-foreground font-medium">
-                        {attestationResult.endDate || "-"} / {attestationResult.endTimestamp || 0}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div>
-                    <p className="text-xs text-muted-foreground">Profit percentage</p>
-                    <p className="text-foreground font-semibold text-lg">
-                      {attestationResult.profitPercent === "" ? "-" : `${attestationResult.profitPercent}%`}
-                    </p>
-                  </div>
-
-                  <div className="pt-2 border-t border-border">
-                    <p className="text-xs text-muted-foreground">Transaction hash</p>
-                    <div className="flex gap-2 items-center">
-                      <p className="text-foreground break-all font-mono text-sm">{attestationResult.txHash}</p>
-                      <Button variant="ghost" size="icon" onClick={copyTxHash} className="shrink-0">
-                        {copiedTx ? <CheckCircle2 className="w-4 h-4 text-primary" /> : <Copy className="w-4 h-4" />}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-6 text-center">
-                  <Button variant="ghost" onClick={resetApp} className="text-muted-foreground hover:text-foreground">
-                    <Link2 className="w-4 h-4 mr-2" />
-                    Create Another Proof
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        )}
       </AnimatePresence>
 
       <AnimatePresence>

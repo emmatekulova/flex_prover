@@ -18,6 +18,8 @@ const (
 	OpCommandBinanceAccountSummary  = "BINANCE_ACCOUNT_SUMMARY"
 	OpCommandBinanceUserProfile     = "BINANCE_USER_PROFILE"
 	OpCommandBinanceProfileGrowth   = "BINANCE_PROFILE_GROWTH"
+
+	OpCommandBitgetProfileGrowth = "BITGET_PROFILE_GROWTH"
 )
 
 // BinanceAPIKey returns the Binance API key from environment, if set.
@@ -44,5 +46,13 @@ func BinanceFuturesAPIBaseURL() string {
 		return v
 	}
 	return "https://fapi.binance.com"
+}
+
+// BitgetAPIBaseURL returns the Bitget API base URL, defaulting to production.
+func BitgetAPIBaseURL() string {
+	if v := os.Getenv("BITGET_API_BASE_URL"); v != "" {
+		return v
+	}
+	return "https://api.bitget.com"
 }
 

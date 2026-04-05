@@ -1,6 +1,8 @@
 export interface AttestationSubmitRequest {
+  exchange?: "binance" | "bitget"
   apiKey: string
   secretKey: string
+  passphrase?: string
   wallet: string
   windowDays?: number
 }

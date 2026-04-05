@@ -200,3 +200,73 @@ type BinanceAccountPnlAttestationPayload struct {
 	FetchedAt             int64  `json:"fetchedAt"`
 	Version               string `json:"version"`
 }
+
+// ── Bitget types ──────────────────────────────────────────────────────────────
+
+// BitgetProfileGrowthRequest is the originalMessage payload for Bitget attestation.
+type BitgetProfileGrowthRequest struct {
+	APIKey     string `json:"apiKey"`
+	SecretKey  string `json:"secretKey"`
+	Passphrase string `json:"passphrase"`
+	Wallet     string `json:"wallet"`
+	WindowDays int    `json:"windowDays"`
+}
+
+// BitgetSnapshotPoint is a single portfolio value snapshot for Bitget.
+type BitgetSnapshotPoint struct {
+	Date      string `json:"date"`
+	TotalUSDT string `json:"totalUsdt"`
+}
+
+// BitgetProfileGrowthPayload is what the TEE signs for a Bitget attestation.
+// Field names match BinanceProfileGrowthPayload so the shared route handler parses both identically.
+type BitgetProfileGrowthPayload struct {
+	Source        string              `json:"source"`        // "bitget-profile-growth"
+	Wallet        string              `json:"wallet"`
+	WindowDays    int                 `json:"windowDays"`
+	StartSnapshot BitgetSnapshotPoint `json:"startSnapshot"`
+	EndSnapshot   BitgetSnapshotPoint `json:"endSnapshot"`
+	GrowthPercent string              `json:"growthPercent"` // "0.00" — Bitget has no snapshot history API
+	TotalUSDT     string              `json:"totalUsdt"`
+	FetchedAt     int64               `json:"fetchedAt"`
+	Version       string              `json:"version"`
+}
+
+// BitgetAsset is one entry from GET /api/v2/spot/account/assets.
+type BitgetAsset struct {
+	CoinName  string `json:"coinName"`
+	Available string `json:"available"`
+	Frozen    string `json:"frozen"`
+	Locked    string `json:"locked"`
+}
+
+// BitgetAssetsResponse wraps the Bitget assets endpoint response.
+type BitgetAssetsResponse struct {
+	Code string        `json:"code"`
+	Data []BitgetAsset `json:"data"`
+}
+
+// BitgetTicker is one entry from GET /api/v2/spot/market/tickers.
+type BitgetTicker struct {
+	Symbol string `json:"symbol"` // e.g. "BTCUSDT"
+	LastPr string `json:"lastPr"` // last traded price
+}
+
+// BitgetTickersResponse wraps the Bitget tickers endpoint response.
+type BitgetTickersResponse struct {
+	Code string         `json:"code"`
+	Data []BitgetTicker `json:"data"`
+}
+
+// BitgetFuturesAccount is one entry from GET /api/v2/mix/account/accounts.
+type BitgetFuturesAccount struct {
+	MarginCoin  string `json:"marginCoin"` // e.g. "USDT", "BTC"
+	AccountEquity string `json:"accountEquity"`
+	UsdtEquity  string `json:"usdtEquity"`  // USDT-denominated equity (present for all product types)
+}
+
+// BitgetFuturesAccountsResponse wraps the Bitget futures accounts endpoint response.
+type BitgetFuturesAccountsResponse struct {
+	Code string                 `json:"code"`
+	Data []BitgetFuturesAccount `json:"data"`
+}

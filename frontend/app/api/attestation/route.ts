@@ -34,23 +34,41 @@ function toolsDir(): string {
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as AttestationSubmitRequest
+    const exchange = body.exchange ?? "binance"
     const apiKey = body.apiKey?.trim()
     const secretKey = body.secretKey?.trim()
+    const passphrase = body.passphrase?.trim()
     const wallet = body.wallet?.trim()
     const windowDays = body.windowDays && body.windowDays > 0 ? body.windowDays : 7
 
     if (!apiKey || !secretKey || !wallet) {
       return NextResponse.json({ error: "apiKey, secretKey, and wallet are required" }, { status: 400 })
     }
+    if (exchange === "bitget" && !passphrase) {
+      return NextResponse.json({ error: "passphrase is required for Bitget" }, { status: 400 })
+    }
 
-    const publishArgs = [
-      "run",
-      "./cmd/publish-attestation",
-      "-apiKey", apiKey,
-      "-secretKey", secretKey,
-      "-wallet", wallet,
-      "-days", String(windowDays),
-    ]
+    let publishArgs: string[]
+    if (exchange === "bitget") {
+      publishArgs = [
+        "run",
+        "./cmd/publish-attestation-bitget",
+        "-apiKey", apiKey,
+        "-secretKey", secretKey,
+        "-passphrase", passphrase!,
+        "-wallet", wallet,
+        "-days", String(windowDays),
+      ]
+    } else {
+      publishArgs = [
+        "run",
+        "./cmd/publish-attestation",
+        "-apiKey", apiKey,
+        "-secretKey", secretKey,
+        "-wallet", wallet,
+        "-days", String(windowDays),
+      ]
+    }
 
     const publishResult = await execFileAsync("go", publishArgs, {
       cwd: toolsDir(),
