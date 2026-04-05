@@ -5,25 +5,17 @@ import { AnimatePresence, motion } from "framer-motion"
 import {
   ArrowRight,
   CheckCircle2,
-  FileText,
-  MoreVertical,
   Shield,
   Terminal,
   Wallet,
 } from "lucide-react"
 
 import { ApiKeyManager, type ApiKeyManagerHandle, type ApiKeySaveResult } from "@/components/api-key-manager"
-import { DocsSheet } from "@/components/docs-sheet"
+import { DocsContent } from "@/components/docs-sheet"
 import { StepWizard } from "@/components/step-wizard"
 import { Verifier } from "@/components/verifier"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import type { AttestationApiResponse, AttestationResult, IndividualTradesResult, PositionsFetchResponse, TradePosition } from "@/lib/attestation"
 import { ProofCard } from "@/components/proof-card"
 import { TradesProofCard } from "@/components/trades-proof-card"
@@ -38,7 +30,7 @@ const steps = [
 ]
 
 type AppState = "landing" | "wizard" | "calculating"
-type Tab = "create" | "verify" | "whale"
+type Tab = "create" | "verify" | "whale" | "docs"
 
 export default function FlexProver() {
   const [appState, setAppState] = useState<AppState>("landing")
@@ -46,7 +38,6 @@ export default function FlexProver() {
   const [currentStep, setCurrentStep] = useState(1)
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
   const [logoRevealed, setLogoRevealed] = useState(false)
-  const [docsOpen, setDocsOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
   const [walletConnected, setWalletConnected] = useState(false)
@@ -283,36 +274,19 @@ export default function FlexProver() {
 
         {showTabs && (
           <div className="hidden sm:flex items-center gap-1 p-1 rounded-lg bg-secondary/50 border border-border">
-            <button
-              onClick={() => setActiveTab("create")}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-                activeTab === "create"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Create
-            </button>
-            <button
-              onClick={() => setActiveTab("verify")}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-                activeTab === "verify"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Verify
-            </button>
-            <button
-              onClick={() => setActiveTab("whale")}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-                activeTab === "whale"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Whale Group
-            </button>
+            {(["create", "verify", "whale", "docs"] as Tab[]).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                  activeTab === tab
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {tab === "create" ? "Create" : tab === "verify" ? "Verify" : tab === "whale" ? "Whale Group" : "Docs"}
+              </button>
+            ))}
           </div>
         )}
       </div>
@@ -323,22 +297,6 @@ export default function FlexProver() {
             Back
           </Button>
         )}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
-              <MoreVertical className="w-5 h-5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="bg-card border-border">
-            <DropdownMenuItem
-              onClick={() => setDocsOpen(true)}
-              className="text-foreground focus:bg-secondary cursor-pointer"
-            >
-              <FileText className="w-4 h-4 mr-2" />
-              Documentation
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
       </div>
     </header>
   )
@@ -773,9 +731,13 @@ export default function FlexProver() {
                 <div className="max-w-lg mx-auto py-8">
                   <Verifier />
                 </div>
-              ) : (
+              ) : activeTab === "whale" ? (
                 <div className="max-w-lg mx-auto py-8">
                   <WhalePage walletAddress={walletAddress} onNavigateToCreate={() => setActiveTab("create")} />
+                </div>
+              ) : (
+                <div className="py-8">
+                  <DocsContent />
                 </div>
               )}
             </div>
@@ -817,9 +779,6 @@ export default function FlexProver() {
 
       </AnimatePresence>
 
-      <AnimatePresence>
-        {docsOpen && <DocsSheet open={docsOpen} onClose={() => setDocsOpen(false)} />}
-      </AnimatePresence>
     </main>
   )
 }
