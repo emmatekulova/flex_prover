@@ -13,7 +13,7 @@ The current options all fail in the same ways:
 - **Self-reported stats** are the same problem with more steps. A spreadsheet you filled in is not a proof, it is a claim.
 - **Third-party trackers** require you to permanently connect your exchange account to an external service, which then owns that relationship indefinitely.
 
-## Solution
+## Solution 
 
 Flex Prover uses a **Trusted Execution Environment (TEE)** on Flare's Confidential Compute (FCC) framework to fetch specific trading data from Binance and attest it on-chain. The TEE guarantees that the data was genuinely retrieved from Binance's API and was not tampered with — no trust in the prover required.
 

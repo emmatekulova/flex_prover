@@ -1,145 +1,260 @@
 "use client"
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { motion } from "framer-motion"
-import { Shield, ExternalLink, Twitter, QrCode, Eye, EyeOff, TrendingUp } from "lucide-react"
+import { Shield, ExternalLink, Twitter, TrendingUp, Copy, Download, CheckCircle2 } from "lucide-react"
+import { QRCodeCanvas } from "qrcode.react"
 import { Button } from "@/components/ui/button"
-import { Switch } from "@/components/ui/switch"
-import { Label } from "@/components/ui/label"
 
 interface ProofCardProps {
-  ensName: string
-  pnl: string
-  pnlPercentage: string
-  verifiedAt: string
+  walletAddress: string
+  profitPercent: string
+  txHash: string
+  startDate: string
+  endDate: string
+  exchange?: "binance" | "bitget" | string
 }
 
-export function ProofCard({ ensName, pnl, pnlPercentage, verifiedAt }: ProofCardProps) {
-  const [showPnl, setShowPnl] = useState(true)
-  const [showQr, setShowQr] = useState(true)
-  const [showTimestamp, setShowTimestamp] = useState(true)
+export function ProofCard({ walletAddress, profitPercent, txHash, startDate, endDate, exchange }: ProofCardProps) {
+  const cardRef = useRef<HTMLDivElement>(null)
+  const [copiedLink, setCopiedLink] = useState(false)
+
+  const txUrl = `https://coston2-explorer.flare.network/tx/${txHash}`
+  const shortWallet = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
+  const profitValue = profitPercent !== "" ? `${profitPercent}%` : "N/A"
+  const exchangeLabel = exchange === "bitget" ? "Bitget" : exchange === "binance" ? "Binance" : "Unknown"
 
   const handleShareToX = () => {
-    const text = `Just verified my trading performance with @FlexProver! ${showPnl ? pnlPercentage + " PNL" : ""} - Proof of Whale certified. #Web3 #DeFi`
-    window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank")
+    const text = `Just verified my trading performance on-chain! ${profitValue} PNL proven with @FlexProver on Flare Network. #FlexProver #Flare #DeFi`
+    window.open(
+      `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(txUrl)}`,
+      "_blank",
+    )
+  }
+
+  const handleCopyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(txUrl)
+    } catch {
+      const el = document.createElement("textarea")
+      el.value = txUrl
+      el.style.cssText = "position:fixed;opacity:0"
+      document.body.appendChild(el)
+      el.select()
+      document.execCommand("copy")
+      document.body.removeChild(el)
+    }
+    setCopiedLink(true)
+    setTimeout(() => setCopiedLink(false), 1500)
+  }
+
+  const handleDownloadPng = async () => {
+    if (!cardRef.current) return
+    try {
+      const { toPng } = await import("html-to-image")
+
+      const sourceNode = cardRef.current
+      const exportQr = sourceNode.querySelector("[data-proof-qr]") as HTMLDivElement | null
+      const exportPnlValue = sourceNode.querySelector("[data-proof-pnl-value]") as HTMLParagraphElement | null
+      const exportTeeLabel = sourceNode.querySelector("[data-proof-tee-label]") as HTMLSpanElement | null
+      const previousQrStyles = exportQr
+        ? {
+            width: exportQr.style.width,
+            height: exportQr.style.height,
+            padding: exportQr.style.padding,
+          }
+        : null
+      const previousPnlStyles = exportPnlValue
+        ? {
+            fontSize: exportPnlValue.style.fontSize,
+            lineHeight: exportPnlValue.style.lineHeight,
+          }
+        : null
+      const previousTeeStyles = exportTeeLabel
+        ? {
+            fontSize: exportTeeLabel.style.fontSize,
+            whiteSpace: exportTeeLabel.style.whiteSpace,
+          }
+        : null
+
+      if (exportQr) {
+        exportQr.style.width = "132px"
+        exportQr.style.height = "132px"
+        exportQr.style.padding = "10px"
+      }
+
+      if (exportPnlValue) {
+        exportPnlValue.style.fontSize = "56px"
+        exportPnlValue.style.lineHeight = "1"
+      }
+
+      if (exportTeeLabel) {
+        exportTeeLabel.style.fontSize = "13px"
+        exportTeeLabel.style.whiteSpace = "nowrap"
+      }
+
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+
+      const baseOptions = {
+        backgroundColor: "#0a0a0f",
+        pixelRatio: 3,
+        cacheBust: true,
+      }
+
+      let dataUrl: string
+      try {
+        dataUrl = await toPng(sourceNode, baseOptions)
+      } catch {
+        dataUrl = await toPng(sourceNode, {
+          ...baseOptions,
+          fontEmbedCSS: "",
+        })
+      } finally {
+        if (exportQr && previousQrStyles) {
+          exportQr.style.width = previousQrStyles.width
+          exportQr.style.height = previousQrStyles.height
+          exportQr.style.padding = previousQrStyles.padding
+        }
+        if (exportPnlValue && previousPnlStyles) {
+          exportPnlValue.style.fontSize = previousPnlStyles.fontSize
+          exportPnlValue.style.lineHeight = previousPnlStyles.lineHeight
+        }
+        if (exportTeeLabel && previousTeeStyles) {
+          exportTeeLabel.style.fontSize = previousTeeStyles.fontSize
+          exportTeeLabel.style.whiteSpace = previousTeeStyles.whiteSpace
+        }
+      }
+
+      const link = document.createElement("a")
+      link.download = `proof-${shortWallet}.png`
+      link.href = dataUrl
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } catch (error) {
+      console.error("Failed to download PNG", error)
+      alert("Could not generate PNG right now. Please try again.")
+    }
   }
 
   return (
-    <div className="space-y-6">
-      {/* The Proof Card */}
+    <div className="space-y-4">
+      {/* The Proof Card — captured for PNG download */}
       <motion.div
-        initial={{ opacity: 0, scale: 0.9 }}
+        initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.5 }}
-        className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-secondary p-1"
+        transition={{ duration: 0.4 }}
+        className="relative overflow-hidden rounded-2xl p-[1px] bg-gradient-to-br from-primary/40 via-border to-accent/30"
       >
-        <div className="absolute inset-0 bg-gradient-to-br from-primary/20 via-transparent to-accent/20 opacity-50" />
-        <div className="relative rounded-xl bg-card/90 backdrop-blur-xl p-6 sm:p-8">
+        <div
+          ref={cardRef}
+          className="rounded-2xl bg-[#0a0a0f] p-6 sm:p-8 md:p-10 flex flex-col gap-8 w-full max-w-5xl mx-auto"
+        >
           {/* Header */}
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center">
                 <span className="text-primary font-bold text-sm">FP</span>
               </div>
-              <span className="font-semibold text-sm text-muted-foreground">FlexProver</span>
+              <span className="font-semibold text-lg text-muted-foreground">FlexProver</span>
             </div>
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-accent/10 border border-accent/30">
               <Shield className="w-4 h-4 text-accent" />
-              <span className="text-xs font-medium text-accent">TEE Verified</span>
+              <span data-proof-tee-label className="text-sm font-medium text-accent">TEE Verified</span>
             </div>
           </div>
 
-          {/* ENS Name */}
-          <div className="mb-6">
-            <p className="text-xs text-muted-foreground mb-1">Verified Identity</p>
-            <h2 className="text-3xl sm:text-4xl font-bold text-foreground tracking-tight">
-              {ensName}
-            </h2>
+          {/* Wallet */}
+          <div>
+            <p className="text-sm text-muted-foreground mb-2">Wallet Address</p>
+            <p className="text-xl sm:text-2xl font-bold text-foreground font-mono tracking-tight break-all leading-tight">
+              {walletAddress}
+            </p>
           </div>
 
-          {/* PNL Display */}
-          {showPnl && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="mb-6 p-4 rounded-xl bg-primary/10 border border-primary/20"
+          {/* PNL */}
+          <div className="p-5 rounded-xl bg-primary/10 border border-primary/25">
+            <div className="flex items-center gap-2 mb-2">
+              <TrendingUp className="w-5 h-5 text-primary" />
+              <span className="text-sm text-muted-foreground">Verified Trading Performance</span>
+            </div>
+            <p data-proof-pnl-value className="text-5xl sm:text-6xl font-bold text-primary leading-none">{profitValue}</p>
+            <p className="text-sm text-muted-foreground mt-3">
+              {startDate} — {endDate}
+            </p>
+            <p className="text-sm text-muted-foreground mt-1">
+              Source CEX: <span className="text-foreground font-semibold">{exchangeLabel}</span>
+            </p>
+          </div>
+
+          {/* Footer: TX + QR */}
+          <div className="flex items-end justify-between pt-4 border-t border-border/30 gap-4">
+            <div className="min-w-0 mr-4">
+              <p className="text-sm text-muted-foreground mb-2">On-Chain Proof</p>
+              <p className="text-sm font-mono text-foreground break-all leading-relaxed">{txHash}</p>
+            </div>
+            <div
+              data-proof-qr
+              className="w-28 h-28 shrink-0 rounded-xl bg-white flex items-center justify-center overflow-hidden p-2 shadow-sm"
             >
-              <div className="flex items-center gap-2 mb-1">
-                <TrendingUp className="w-4 h-4 text-primary" />
-                <span className="text-xs text-muted-foreground">Trading Performance</span>
-              </div>
-              <div className="flex items-baseline gap-3">
-                <span className="text-3xl sm:text-4xl font-bold text-primary">
-                  {pnlPercentage}
-                </span>
-                <span className="text-lg text-muted-foreground">{pnl}</span>
-              </div>
-            </motion.div>
-          )}
-
-          {/* Footer */}
-          <div className="flex items-end justify-between">
-            <div>
-              {showTimestamp && (
-                <div>
-                  <p className="text-xs text-muted-foreground">Verified on</p>
-                  <p className="text-sm font-medium text-foreground">{verifiedAt}</p>
-                </div>
-              )}
+              <QRCodeCanvas
+                value={txUrl}
+                size={92}
+                bgColor="#ffffff"
+                fgColor="#000000"
+                level="H"
+                includeMargin
+              />
             </div>
-            {showQr && (
-              <div className="w-16 h-16 rounded-lg bg-foreground/10 border border-border flex items-center justify-center">
-                <QrCode className="w-10 h-10 text-muted-foreground" />
-              </div>
-            )}
           </div>
         </div>
       </motion.div>
 
-      {/* Card Controls */}
-      <div className="p-4 rounded-xl bg-secondary/50 border border-border space-y-4">
-        <h3 className="text-sm font-semibold text-foreground">Customize Card</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-pnl" className="text-sm text-muted-foreground flex items-center gap-2">
-              {showPnl ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
-              Show PNL
-            </Label>
-            <Switch id="show-pnl" checked={showPnl} onCheckedChange={setShowPnl} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-qr" className="text-sm text-muted-foreground flex items-center gap-2">
-              <QrCode className="w-4 h-4" />
-              QR Code
-            </Label>
-            <Switch id="show-qr" checked={showQr} onCheckedChange={setShowQr} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-timestamp" className="text-sm text-muted-foreground">
-              Timestamp
-            </Label>
-            <Switch id="show-timestamp" checked={showTimestamp} onCheckedChange={setShowTimestamp} />
-          </div>
-        </div>
-      </div>
-
       {/* Action Buttons */}
-      <div className="flex flex-col sm:flex-row gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Button
           onClick={handleShareToX}
-          className="flex-1 bg-foreground text-background hover:bg-foreground/90"
+          className="bg-foreground text-background hover:bg-foreground/90"
         >
           <Twitter className="w-4 h-4 mr-2" />
           Share to X
         </Button>
         <Button
           variant="outline"
-          className="flex-1 border-border text-foreground hover:bg-secondary"
+          onClick={handleCopyLink}
+          className="border-border text-foreground hover:bg-secondary"
         >
-          <ExternalLink className="w-4 h-4 mr-2" />
-          View On-Chain Proof
+          {copiedLink ? (
+            <>
+              <CheckCircle2 className="w-4 h-4 mr-2 text-primary" />
+              Copied!
+            </>
+          ) : (
+            <>
+              <Copy className="w-4 h-4 mr-2" />
+              Copy Link
+            </>
+          )}
+        </Button>
+        <Button
+          variant="outline"
+          onClick={handleDownloadPng}
+          className="border-border text-foreground hover:bg-secondary"
+        >
+          <Download className="w-4 h-4 mr-2" />
+          Download PNG
         </Button>
       </div>
+
+      {/* View on Flarescan */}
+      <Button
+        variant="ghost"
+        className="w-full text-muted-foreground hover:text-foreground"
+        onClick={() => window.open(txUrl, "_blank")}
+      >
+        <ExternalLink className="w-4 h-4 mr-2" />
+        View Transaction on Coston2 Explorer
+      </Button>
     </div>
   )
 }
