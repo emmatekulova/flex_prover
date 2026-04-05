@@ -112,14 +112,21 @@ export default function FlexProver() {
 
   const runAttestationFlow = async () => {
     if (!walletAddress || !apiCredentials) {
-      setSubmitError("Wallet and Binance API credentials are required.")
+      setSubmitError("Wallet and exchange API credentials are required.")
       return
     }
 
+    const exchange = apiCredentials.exchange
     const apiKey = apiCredentials.keys.apiKey?.trim() ?? ""
     const secretKey = apiCredentials.keys.secretKey?.trim() ?? ""
+    const passphrase = apiCredentials.keys.passphrase?.trim()
+
     if (!apiKey || !secretKey) {
-      setSubmitError("Both Binance API key and secret key are required.")
+      setSubmitError("API key and secret key are required.")
+      return
+    }
+    if (exchange === "bitget" && !passphrase) {
+      setSubmitError("Passphrase is required for Bitget.")
       return
     }
 
@@ -129,14 +136,16 @@ export default function FlexProver() {
 
     try {
       await addLog("Preparing attestation request...")
-      await addLog("Sending Binance credentials + wallet to backend...")
+      await addLog(`Sending ${exchange} credentials + wallet to backend...`)
 
       const res = await fetch("/api/attestation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          exchange,
           apiKey,
           secretKey,
+          ...(passphrase ? { passphrase } : {}),
           wallet: walletAddress,
           windowDays: 7,
         }),
@@ -169,10 +178,6 @@ export default function FlexProver() {
       const saved = await apiKeyRef.current?.save()
       if (!saved) {
         setSubmitError("Please provide valid exchange credentials.")
-        return
-      }
-      if (saved.exchange !== "binance") {
-        setSubmitError("Only Binance is supported in this flow.")
         return
       }
       setApiCredentials(saved)
@@ -435,7 +440,7 @@ export default function FlexProver() {
                       >
                         <div>
                           <h2 className="text-2xl font-bold text-foreground mb-2">Link Your Exchange Account</h2>
-                          <p className="text-muted-foreground">Provide your Binance read-only API credentials.</p>
+                          <p className="text-muted-foreground">Provide your exchange read-only API credentials.</p>
                         </div>
 
                         <ApiKeyManager ref={apiKeyRef} onValidChange={setApiVerified} />
@@ -476,7 +481,7 @@ export default function FlexProver() {
                             <p className="font-semibold text-foreground break-all">{walletAddress ?? "-"}</p>
                           </div>
                           <div className="p-4 rounded-xl bg-secondary/50 border border-border">
-                            <p className="text-xs text-muted-foreground mb-1">Binance credentials</p>
+                            <p className="text-xs text-muted-foreground mb-1">{apiCredentials ? `${apiCredentials.exchange.charAt(0).toUpperCase() + apiCredentials.exchange.slice(1)} credentials` : "Exchange credentials"}</p>
                             <p className="font-semibold text-foreground">{apiCredentials ? "Ready" : "Not captured yet"}</p>
                           </div>
                         </div>
